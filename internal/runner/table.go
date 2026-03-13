@@ -260,3 +260,127 @@ func makeHead(inclSwitch bool, colSwitch, colPort, colLink, colSpeed, colTx, col
 	)
 	return "|" + strings.Join(parts, "|") + "|"
 }
+
+// FormatAlertTable builds a clean, aligned table for alert messages.
+// Columns: Port, Status, Speed, Tx, Rx - all properly aligned.
+func FormatAlertTable(rows []statusRow, includeSwitchColumn bool) string {
+	if len(rows) == 0 {
+		return "(no ports)"
+	}
+
+	// Calculate column widths
+	colPort := 4 // "Port"
+	colStatus := 6 // "Status"
+	colSpeed := 4 // "Mbps"
+	colTx := 2 // "Tx"
+	colRx := 2 // "Rx"
+
+	for _, r := range rows {
+		portStr := portDisplay(r)
+		if w := dispWidth(portStr); w > colPort {
+			colPort = w
+		}
+
+		statusStr := "UP"
+		if !r.linkUp {
+			statusStr = "DOWN"
+		}
+		if w := dispWidth(statusStr); w > colStatus {
+			colStatus = w
+		}
+
+		speedStr := "-"
+		if r.speedMbps != nil {
+			speedStr = fmt.Sprintf("%d", *r.speedMbps)
+		}
+		if w := dispWidth(speedStr); w > colSpeed {
+			colSpeed = w
+		}
+
+		txStr := txCell(r)
+		if w := dispWidth(txStr); w > colTx {
+			colTx = w
+		}
+
+		rxStr := rxCell(r)
+		if w := dispWidth(rxStr); w > colRx {
+			colRx = w
+		}
+	}
+
+	// Build table
+	var sb strings.Builder
+
+	// Header
+	if includeSwitchColumn {
+		fmt.Fprintf(&sb, "%-20s | %s | %s | %s | %s | %s\n",
+			padDisp("Switch", 20),
+			padDisp("Port", colPort),
+			padDisp("Status", colStatus),
+			padDisp("Mbps", colSpeed),
+			padDisp("Tx", colTx),
+			padDisp("Rx", colRx))
+	} else {
+		fmt.Fprintf(&sb, "%s | %s | %s | %s | %s\n",
+			padDisp("Port", colPort),
+			padDisp("Status", colStatus),
+			padDisp("Mbps", colSpeed),
+			padDisp("Tx", colTx),
+			padDisp("Rx", colRx))
+	}
+
+	// Separator
+	if includeSwitchColumn {
+		fmt.Fprintf(&sb, "%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
+			strings.Repeat("-", 20),
+			strings.Repeat("-", colPort),
+			strings.Repeat("-", colStatus),
+			strings.Repeat("-", colSpeed),
+			strings.Repeat("-", colTx),
+			strings.Repeat("-", colRx))
+	} else {
+		fmt.Fprintf(&sb, "%s-+-%s-+-%s-+-%s-+-%s\n",
+			strings.Repeat("-", colPort),
+			strings.Repeat("-", colStatus),
+			strings.Repeat("-", colSpeed),
+			strings.Repeat("-", colTx),
+			strings.Repeat("-", colRx))
+	}
+
+	// Data rows
+	for _, r := range rows {
+		portStr := portDisplay(r)
+
+		statusStr := "UP"
+		if !r.linkUp {
+			statusStr = "DOWN"
+		}
+
+		speedStr := "-"
+		if r.speedMbps != nil {
+			speedStr = fmt.Sprintf("%d", *r.speedMbps)
+		}
+
+		txStr := txCell(r)
+		rxStr := rxCell(r)
+
+		if includeSwitchColumn {
+			fmt.Fprintf(&sb, "%-20s | %s | %s | %s | %s | %s\n",
+				padDisp(r.switchName, 20),
+				padDisp(portStr, colPort),
+				padDisp(statusStr, colStatus),
+				padDisp(speedStr, colSpeed),
+				padDisp(txStr, colTx),
+				padDisp(rxStr, colRx))
+		} else {
+			fmt.Fprintf(&sb, "%s | %s | %s | %s | %s\n",
+				padDisp(portStr, colPort),
+				padDisp(statusStr, colStatus),
+				padDisp(speedStr, colSpeed),
+				padDisp(txStr, colTx),
+				padDisp(rxStr, colRx))
+		}
+	}
+
+	return strings.TrimRight(sb.String(), "\n")
+}

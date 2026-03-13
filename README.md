@@ -1,22 +1,25 @@
 # switch-monitor (Go)
 
 A single-binary switch port monitor for **Netgear GS108Ev3** and **Mercury SG108 Pro** managed switches.  
-Polls port link status and speed, prints a summary table, and sends email alerts when a concerned port goes down or its link speed drops below the configured threshold.
-
-This is a Go rewrite of the Python implementation with zero runtime dependencies — just copy the binary.
+Polls port link status and speed, prints a summary table, and sends alerts when a concerned port goes down or its link speed drops below the configured threshold.
 
 ---
 
 ## Features
 
-- HTTP scraping of switch web interfaces (no third-party libraries required at runtime)
-- Supports Netgear GS108Ev3 (password-only, MD5 hashed auth) and Mercury SG108 Pro (username/password)
+- HTTP scraping of switch web interfaces — no runtime dependencies, just copy the binary
+- Supports **Netgear GS108Ev3** (password-only, MD5 hashed auth) and **Mercury SG108 Pro** (username/password)
 - Configurable concerned ports, port aliases, and minimum speed threshold
-- Transition-based alerting (emails only on state changes, not every poll)
+- Transition-based alerting (alerts only on state changes, not every poll)
+- **Multiple email recipients** — send to any number of addresses
+- **Multiple Telegram bots/chats** — each with its own token, chat ID, and optional proxy
 - SMTP email with port-465 SSL and port-587 STARTTLS support
-- Per-switch ASCII status tables in console output and email body
+- Telegram Bot API notifications with optional HTTP proxy support
+- Aligned plain-text status table in console output and alert messages
+- **Hot config reload** — edits to `config.yaml` are picked up automatically between poll cycles; no restart needed
 - Structured log file (`slog`) + optional JSONL history per port check
 - `--once` flag for cron/systemd-timer use
+- `--no-email` flag to suppress all alerts (useful for testing)
 
 ---
 
@@ -28,7 +31,7 @@ This is a Go rewrite of the Python implementation with zero runtime dependencies
 # For the local machine (x86-64)
 go build -o switch-monitor ./cmd/switch-monitor/
 
-# For NanoPi R2S / other ARM64 Linux (cross-compile from any machine)
+# For NanoPi R2S or other ARM64 Linux (cross-compile from any machine)
 GOOS=linux GOARCH=arm64 go build -o switch-monitor-arm64 ./cmd/switch-monitor/
 ```
 
@@ -38,56 +41,107 @@ Go 1.22 or newer is required.
 
 ```bash
 cp config.example.yaml config.yaml
-# Edit config.yaml with your switch IPs, passwords, and email settings
+# Edit config.yaml with your switch IPs, passwords, and alert settings
 ```
 
 ### Run
 
 ```bash
-# Continuous polling (interval from config)
+# Continuous polling (interval from config, config changes reloaded automatically)
 ./switch-monitor --config config.yaml
 
-# Single check (for cron)
+# Single check and exit (for cron)
 ./switch-monitor --config config.yaml --once
+
+# Suppress all alerts (useful for testing)
+./switch-monitor --config config.yaml --no-email
 ```
 
 ---
 
 ## Configuration
 
-All settings are in a single YAML file.  See `config.example.yaml` for a fully-annotated example.
+All settings live in a single YAML file. See `config.example.yaml` for a fully-annotated example.  
+The file is watched for changes between every poll cycle — no restart required to apply edits.
+
+### Switches
+
+| Key | Description |
+|-----|-------------|
+| `switches[].name` | Display name |
+| `switches[].type` | `netgear_gs108ev3` or `mercury_sg108pro` |
+| `switches[].admin_url` | e.g. `http://192.168.1.1` |
+| `switches[].password` | Admin password |
+| `switches[].username` | Mercury only; usually `admin` |
+| `switches[].concerned_ports` | List of port numbers to monitor |
+| `switches[].port_aliases` | Optional map `{1: "WAN", 2: "NAS"}` shown in tables and alerts |
+
+### Alerting
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `switches[].name` | — | Display name |
-| `switches[].type` | — | `netgear_gs108ev3` or `mercury_sg108pro` |
-| `switches[].admin_url` | — | `http://192.168.x.x` |
-| `switches[].password` | — | Admin password |
-| `switches[].username` | — | Mercury only; usually `admin` |
-| `switches[].concerned_ports` | — | List of port numbers to monitor |
-| `switches[].port_aliases` | — | Optional map: `{1: "Server", 2: "NAS"}` |
-| `min_speed_mbps` | `1000` | Alert if link speed drops below this |
-| `alert_email` | — | Recipient address |
-| `check_interval_seconds` | `60` | Polling interval |
-| `smtp.enabled` | `true` | Enable SMTP email alerts |
+| `alert_emails` | — | List of email recipients (or single `alert_email` for backwards compatibility) |
+| `min_speed_mbps` | `1000` | Alert if link speed drops below this value |
+| `check_interval_seconds` | `60` | Polling interval in seconds |
+
+### SMTP
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `smtp.enabled` | `false` | Enable email alerts |
 | `smtp.smtp_host` | — | e.g. `smtp.qq.com` |
 | `smtp.smtp_port` | — | `465` (SSL) or `587` (STARTTLS) |
-| `smtp.smtp_use_tls` | `true` | Enable STARTTLS for non-465 ports |
+| `smtp.smtp_use_tls` | `false` | Enable STARTTLS (for port 587) |
 | `smtp.from_email` | — | Sender address (overridden by `smtp_user` if set) |
 | `smtp.smtp_user` | — | SMTP login username |
 | `smtp.smtp_password` | — | SMTP login password |
-| `telegram.enabled` | `false` | Enable Telegram bot alerts |
-| `telegram.token` | — | Telegram Bot API token |
-| `telegram.chat_id` | — | Telegram user or group chat ID |
-| `telegram.proxy` | — | Optional HTTP proxy (e.g. `http://127.0.0.1:1080`) |
+
+### Telegram
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `telegram.enabled` | `false` | Enable Telegram alerts |
+| `telegram.recipients[].token` | — | Telegram Bot API token |
+| `telegram.recipients[].chat_id` | — | Target user or group chat ID |
+| `telegram.recipients[].proxy` | — | Optional HTTP proxy, e.g. `http://127.0.0.1:7890` |
+
+A single legacy `token` / `chat_id` / `proxy` directly under `telegram:` is still accepted and treated as a one-item list.
+
+### Logging
+
+| Key | Default | Description |
+|-----|---------|-------------|
 | `log_dir` | `logs` | Directory for log and history files |
 | `log_file` | `switch_monitor.log` | Log filename |
-| `history_file` | `switch_monitor_history.jsonl` | JSONL history file (set empty to disable) |
+| `history_file` | `switch_monitor_history.jsonl` | JSONL history (set empty to disable) |
 | `log_level` | `INFO` | `DEBUG`, `INFO`, `WARN`, or `ERROR` |
 
 ---
 
-## Systemd service (optional)
+## Alert message format
+
+Alerts include an aligned status table per switch followed by an issue summary:
+
+```
+[Switch Monitor] Summary: 2 issue(s)
+
+Issues: 2
+
+=== mercury-sg108 ===
+Port              | Status | Mbps | Tx        | Rx
+------------------+--------+------+-----------+-----------
+1 · optical modem | UP     | 1000 | 1,234,567 | 9,876,543
+2 · IPTV          | DOWN   | -    | -         | -
+5 · Mom           | UP     | 100  | 50,000    | 60,000
+
+Issue Details:
+  - mercury-sg108 port 2 (IPTV): DOWN
+  - mercury-sg108 port 5 (Mom): LOW SPEED (100 Mbps)
+```
+
+---
+
+## Systemd service
 
 Create `/etc/systemd/system/switch-monitor.service`:
 
@@ -108,3 +162,5 @@ WantedBy=multi-user.target
 sudo systemctl daemon-reload
 sudo systemctl enable --now switch-monitor
 ```
+
+Config changes (e.g. adding a Telegram recipient or adjusting the poll interval) are applied automatically without restarting the service.

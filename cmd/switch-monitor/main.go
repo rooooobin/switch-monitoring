@@ -23,25 +23,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *noEmail {
-		cfg.SMTP = nil
-		cfg.AlertEmail = ""
-		if cfg.Telegram != nil {
-			cfg.Telegram.Enabled = false
-		}
-	}
-
-	historyFile := ""
-	if cfg.HistoryFile != "" {
-		historyFile = cfg.LogDir + "/" + cfg.HistoryFile
-	}
-	_ = historyFile // used in runner
-
 	if err := logging.Setup(cfg.LogDir, cfg.LogFile, cfg.LogLevel, true); err != nil {
 		fmt.Fprintf(os.Stderr, "logging setup: %v\n", err)
 		os.Exit(1)
 	}
 
-	r := runner.New(cfg)
+	r := runner.New(cfg, *cfgPath, *noEmail)
 	r.RunLoop(*once)
 }

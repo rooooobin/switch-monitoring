@@ -58,42 +58,49 @@ type SMTPConfig struct {
 	Password string `yaml:"smtp_password"`
 }
 
+// TelegramRecipient holds settings for a single Telegram bot+chat destination.
+type TelegramRecipient struct {
+	Token  string `yaml:"token"`
+	ChatID string `yaml:"chat_id"`
+	Proxy  string `yaml:"proxy"`
+}
+
 // TelegramConfig holds settings for Telegram bot notifications.
 type TelegramConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Token   string `yaml:"token"`
-	ChatID  string `yaml:"chat_id"`
-	Proxy   string `yaml:"proxy"`
+	Enabled    bool                `yaml:"enabled"`
+	Recipients []TelegramRecipient `yaml:"recipients"`
 }
 
 // MonitorConfig is the top-level configuration.
 type MonitorConfig struct {
-	Switches              []SwitchConfig  `yaml:"switches"`
-	AlertEmail            string          `yaml:"alert_email"`
-	MinSpeedMbps          int             `yaml:"min_speed_mbps"`
-	CheckIntervalSeconds  int             `yaml:"check_interval_seconds"`
-	SMTP                  *SMTPConfig     `yaml:"smtp"`
-	Telegram              *TelegramConfig `yaml:"telegram"`
-	LogDir                string          `yaml:"log_dir"`
-	LogFile               string          `yaml:"log_file"`
-	HistoryFile           string          `yaml:"history_file"`
-	LogLevel              string          `yaml:"log_level"`
+	Switches             []SwitchConfig  `yaml:"switches"`
+	AlertEmails          []string        `yaml:"alert_emails"`
+	MinSpeedMbps         int             `yaml:"min_speed_mbps"`
+	CheckIntervalSeconds int             `yaml:"check_interval_seconds"`
+	SMTP                 *SMTPConfig     `yaml:"smtp"`
+	Telegram             *TelegramConfig `yaml:"telegram"`
+	LogDir               string          `yaml:"log_dir"`
+	LogFile              string          `yaml:"log_file"`
+	HistoryFile          string          `yaml:"history_file"`
+	LogLevel             string          `yaml:"log_level"`
 }
 
 // rawYAML mirrors the YAML structure for flexible parsing.
 type rawYAML struct {
 	Switches []struct {
-		Name           string         `yaml:"name"`
-		AdminURL       string         `yaml:"admin_url"`
-		Type           string         `yaml:"type"`
-		ConcernedPorts interface{}    `yaml:"concerned_ports"`
-		Password       string         `yaml:"password"`
-		Username       string         `yaml:"username"`
+		Name           string            `yaml:"name"`
+		AdminURL       string            `yaml:"admin_url"`
+		Type           string            `yaml:"type"`
+		ConcernedPorts interface{}       `yaml:"concerned_ports"`
+		Password       string            `yaml:"password"`
+		Username       string            `yaml:"username"`
 		PortAliases    map[string]string `yaml:"port_aliases"`
 	} `yaml:"switches"`
-	AlertEmail           string   `yaml:"alert_email"`
-	MinSpeedMbps         int      `yaml:"min_speed_mbps"`
-	CheckIntervalSeconds int      `yaml:"check_interval_seconds"`
+	// alert_email (single, legacy) and alert_emails (list) are both accepted.
+	AlertEmail           string      `yaml:"alert_email"`
+	AlertEmails          interface{} `yaml:"alert_emails"`
+	MinSpeedMbps         int         `yaml:"min_speed_mbps"`
+	CheckIntervalSeconds int         `yaml:"check_interval_seconds"`
 	SMTP                 *struct {
 		Enabled   bool   `yaml:"enabled"`
 		Host      string `yaml:"smtp_host"`
@@ -104,10 +111,17 @@ type rawYAML struct {
 		Password  string `yaml:"smtp_password"`
 	} `yaml:"smtp"`
 	Telegram *struct {
-		Enabled bool   `yaml:"enabled"`
-		Token   string `yaml:"token"`
-		ChatID  string `yaml:"chat_id"`
-		Proxy   string `yaml:"proxy"`
+		Enabled    bool   `yaml:"enabled"`
+		// Single recipient (legacy)
+		Token  string `yaml:"token"`
+		ChatID string `yaml:"chat_id"`
+		Proxy  string `yaml:"proxy"`
+		// Multiple recipients
+		Recipients []struct {
+			Token  string `yaml:"token"`
+			ChatID string `yaml:"chat_id"`
+			Proxy  string `yaml:"proxy"`
+		} `yaml:"recipients"`
 	} `yaml:"telegram"`
 	LogDir      string `yaml:"log_dir"`
 	LogFile     string `yaml:"log_file"`
@@ -128,13 +142,13 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 	}
 
 	cfg := &MonitorConfig{
-		AlertEmail:           raw.AlertEmail,
 		MinSpeedMbps:         raw.MinSpeedMbps,
 		CheckIntervalSeconds: raw.CheckIntervalSeconds,
 		LogDir:               orDefault(raw.LogDir, "logs"),
 		LogFile:              orDefault(raw.LogFile, "switch_monitor.log"),
 		HistoryFile:          raw.HistoryFile,
 		LogLevel:             strings.ToUpper(orDefault(raw.LogLevel, "INFO")),
+		AlertEmails:          parseEmailList(raw.AlertEmail, raw.AlertEmails),
 	}
 	if cfg.MinSpeedMbps == 0 {
 		cfg.MinSpeedMbps = 1000
@@ -184,19 +198,30 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 			User:      raw.SMTP.User,
 			Password:  raw.SMTP.Password,
 		}
-		// Default to true if not explicitly set but host is provided
-		if !raw.SMTP.Enabled && raw.SMTP.Host != "" {
-			cfg.SMTP.Enabled = true
-		}
 	}
 
 	if raw.Telegram != nil {
-		cfg.Telegram = &TelegramConfig{
+		tg := &TelegramConfig{
 			Enabled: raw.Telegram.Enabled,
-			Token:   raw.Telegram.Token,
-			ChatID:  raw.Telegram.ChatID,
-			Proxy:   raw.Telegram.Proxy,
 		}
+		// Collect recipients from list first, then fall back to single legacy fields.
+		for _, r := range raw.Telegram.Recipients {
+			if r.Token != "" && r.ChatID != "" {
+				tg.Recipients = append(tg.Recipients, TelegramRecipient{
+					Token:  r.Token,
+					ChatID: r.ChatID,
+					Proxy:  r.Proxy,
+				})
+			}
+		}
+		if len(tg.Recipients) == 0 && raw.Telegram.Token != "" && raw.Telegram.ChatID != "" {
+			tg.Recipients = append(tg.Recipients, TelegramRecipient{
+				Token:  raw.Telegram.Token,
+				ChatID: raw.Telegram.ChatID,
+				Proxy:  raw.Telegram.Proxy,
+			})
+		}
+		cfg.Telegram = tg
 	}
 
 	return cfg, nil
@@ -229,4 +254,30 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// parseEmailList merges a legacy single alert_email and the alert_emails list,
+// deduplicating and ignoring blank entries.
+func parseEmailList(single string, raw interface{}) []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	add(single)
+	switch v := raw.(type) {
+	case string:
+		add(v)
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				add(s)
+			}
+		}
+	}
+	return out
 }

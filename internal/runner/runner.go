@@ -4,6 +4,7 @@ package runner
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -29,26 +30,57 @@ type adapterEntry struct {
 // Runner polls switches, formats tables, and sends alert emails.
 type Runner struct {
 	cfg          *config.MonitorConfig
+	cfgPath      string
+	noEmail      bool
 	checker      *checker.PortChecker
 	alertService *alerting.AlertService
 	adapters     []adapterEntry
 	historyPath  string
+	cfgModTime   time.Time
 }
 
 // New creates a Runner from the given config.
-func New(cfg *config.MonitorConfig) *Runner {
+func New(cfg *config.MonitorConfig, cfgPath string, noEmail bool) *Runner {
 	r := &Runner{
 		cfg:     cfg,
+		cfgPath: cfgPath,
+		noEmail: noEmail,
 		checker: checker.New(cfg.MinSpeedMbps),
 	}
-	hasEmail := cfg.SMTP != nil && cfg.SMTP.Enabled && cfg.AlertEmail != ""
-	hasTg := cfg.Telegram != nil && cfg.Telegram.Enabled && cfg.Telegram.Token != "" && cfg.Telegram.ChatID != ""
-	if hasEmail || hasTg {
-		r.alertService = alerting.New(cfg.SMTP, cfg.AlertEmail, cfg.Telegram)
+	r.applyConfig(cfg)
+	return r
+}
+
+// applyConfig updates the runner's services and adapters from a new config.
+func (r *Runner) applyConfig(cfg *config.MonitorConfig) {
+	if r.noEmail {
+		if cfg.SMTP != nil {
+			cfg.SMTP.Enabled = false
+		}
+		cfg.AlertEmails = nil
+		if cfg.Telegram != nil {
+			cfg.Telegram.Enabled = false
+		}
 	}
+
+	r.cfg = cfg
+	r.checker = checker.New(cfg.MinSpeedMbps)
+
+	hasEmail := cfg.SMTP != nil && cfg.SMTP.Enabled && len(cfg.AlertEmails) > 0
+	hasTg := cfg.Telegram != nil && cfg.Telegram.Enabled && len(cfg.Telegram.Recipients) > 0
+	if hasEmail || hasTg {
+		r.alertService = alerting.New(cfg.SMTP, cfg.AlertEmails, cfg.Telegram)
+	} else {
+		r.alertService = nil
+	}
+
 	if cfg.HistoryFile != "" {
 		r.historyPath = filepath.Join(cfg.LogDir, cfg.HistoryFile)
+	} else {
+		r.historyPath = ""
 	}
+
+	r.adapters = nil
 	for _, sw := range cfg.Switches {
 		sw := sw
 		r.adapters = append(r.adapters, adapterEntry{
@@ -56,7 +88,27 @@ func New(cfg *config.MonitorConfig) *Runner {
 			adapter: makeAdapter(sw),
 		})
 	}
-	return r
+}
+
+// reloadIfChanged checks whether config.yaml has been modified and reloads it.
+func (r *Runner) reloadIfChanged() {
+	fi, err := os.Stat(r.cfgPath)
+	if err != nil {
+		slog.Warn("Config stat failed", "path", r.cfgPath, "error", err)
+		return
+	}
+	if !fi.ModTime().After(r.cfgModTime) {
+		return
+	}
+	slog.Info("Config file changed, reloading", "path", r.cfgPath)
+	newCfg, err := config.LoadConfig(r.cfgPath)
+	if err != nil {
+		slog.Error("Failed to reload config, keeping old config", "error", err)
+		return
+	}
+	r.applyConfig(newCfg)
+	r.cfgModTime = fi.ModTime()
+	slog.Info("Config reloaded successfully")
 }
 
 func makeAdapter(sw config.SwitchConfig) switchAdapter {
@@ -168,18 +220,23 @@ func (r *Runner) RunOnce() {
 			slog.Warn("No SMTP/Telegram configured; issues not alerted", "count", len(runEvents))
 			return
 		}
-		combined := ""
-		for i, part := range allTableParts {
-			if i > 0 {
-				combined += "\n\n"
+
+		// Build pretty alert table
+		var alertParts []string
+		for _, sw := range r.cfg.Switches {
+			rows := rowsBySwitch[sw.Name]
+			if len(rows) == 0 {
+				continue
 			}
-			combined += part
+			swTable := FormatAlertTable(rows, false)
+			alertParts = append(alertParts, fmt.Sprintf("?? %s\n%s", sw.Name, swTable))
 		}
+
 		aliasesBySwitch := make(map[string]map[int]string, len(r.cfg.Switches))
 		for _, sw := range r.cfg.Switches {
 			aliasesBySwitch[sw.Name] = sw.PortAliases
 		}
-		if err := r.alertService.SendSummary(combined, runEvents, aliasesBySwitch); err != nil {
+		if err := r.alertService.SendSummary(alertParts, runEvents, aliasesBySwitch); err != nil {
 			slog.Error("Failed to send summary alert", "error", err)
 		} else {
 			slog.Info("Sent summary alert", "issues", len(runEvents))
@@ -189,12 +246,19 @@ func (r *Runner) RunOnce() {
 
 // RunLoop runs RunOnce in a loop, sleeping check_interval_seconds between each.
 // If once is true, it runs exactly once and returns.
+// Config file is checked for changes before every poll cycle.
 func (r *Runner) RunLoop(once bool) {
+	// Record initial mod time
+	if fi, err := os.Stat(r.cfgPath); err == nil {
+		r.cfgModTime = fi.ModTime()
+	}
+
 	if once {
 		r.RunOnce()
 		return
 	}
 	for {
+		r.reloadIfChanged()
 		r.RunOnce()
 		time.Sleep(time.Duration(r.cfg.CheckIntervalSeconds) * time.Second)
 	}

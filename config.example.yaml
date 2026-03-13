@@ -31,8 +31,10 @@ switches:
 # Alert when a concerned port goes down or link speed drops below this (Mbps)
 min_speed_mbps: 1000
 
-# Email address to receive alerts
-alert_email: user@example.com
+# Email addresses to receive alerts (list; single alert_email is also accepted)
+alert_emails:
+  - alice@example.com
+  - bob@example.com
 
 # How often to poll switches (seconds)
 check_interval_seconds: 43200
@@ -41,12 +43,24 @@ check_interval_seconds: 43200
 # Port 465 = SSL (e.g. smtp.qq.com); port 587 = STARTTLS.
 # When smtp_user is set, the From address is the same as smtp_user (required by QQ and many providers).
 smtp:
+  enabled: true
   smtp_host: smtp.example.com
   smtp_port: 587
   smtp_use_tls: true
   from_email: switch-monitor@example.com
   smtp_user: null
   smtp_password: null
+
+# Telegram bot notifications (multiple bots/chats supported)
+telegram:
+  enabled: true
+  recipients:
+    - token: "111111111:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      chat_id: "123456789"
+      proxy: ""                          # optional, e.g. http://127.0.0.1:7890
+    - token: "222222222:AAFyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+      chat_id: "987654321"
+      proxy: "http://127.0.0.1:7890"
 
 # Logging
 log_dir: logs

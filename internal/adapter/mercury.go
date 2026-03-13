@@ -173,6 +173,17 @@ func (a *MercuryAdapter) GetPortStatuses() ([]model.PortStatus, error) {
 	return result, nil
 }
 
+// Logout terminates the current session on the switch.
+func (a *MercuryAdapter) Logout() error {
+	if a.cookie == nil {
+		return nil
+	}
+	
+	_, err := a.get("/LogoutRpm.htm")
+	a.cookie = nil
+	return err
+}
+
 // ─── HTML/JS parsers ────────────────────────────────────────────────────────
 
 // parseLogonInfo extracts errType from:  var logonInfo = new Array(1, 0, 0);

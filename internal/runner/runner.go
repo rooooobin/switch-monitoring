@@ -19,6 +19,7 @@ import (
 // switchAdapter is the common interface for all switch adapters.
 type switchAdapter interface {
 	GetPortStatuses() ([]model.PortStatus, error)
+	Logout() error
 }
 
 // adapterEntry pairs a config with its adapter.
@@ -136,6 +137,12 @@ func (r *Runner) RunOnce() {
 		rowsBySwitch[swName] = nil
 
 		statuses, err := entry.adapter.GetPortStatuses()
+		
+		// Always attempt to logout to free the session
+		if logoutErr := entry.adapter.Logout(); logoutErr != nil {
+			slog.Debug("Failed to logout", "switch", swName, "error", logoutErr)
+		}
+
 		if err != nil {
 			slog.Error("Failed to poll switch", "switch", swName, "error", err)
 			continue

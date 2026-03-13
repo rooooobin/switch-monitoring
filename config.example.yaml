@@ -1,0 +1,57 @@
+# Switch Port Monitor — example configuration
+# Copy to config.yaml and adjust credentials and paths.
+
+# Switches to monitor
+# If you see "Could not detect switch model": swap admin_url so each type hits the
+# right device. curl http://IP — Netgear shows "NETGEAR ProSAFE Plus Switch".
+switches:
+  # Mercury SG108 Pro (username/password). Use the IP that shows Mercury login.
+  - name: mercury-sg108
+    type: mercury_sg108pro
+    admin_url: http://192.168.1.10
+    username: admin
+    password: your_password
+    concerned_ports: [1, 2, 3, 4, 5, 6, 7, 8]
+    # Optional: human-readable alias per port (shown in table and alert email)
+    port_aliases:
+      1: Living Room
+      2: Server
+      3: AP Upstairs
+
+  # Netgear GS108EV3 (password only). Use the IP that shows "GS108Ev3" / Netgear login.
+  - name: netgear-gs108
+    type: netgear_gs108ev3
+    admin_url: http://192.168.1.11
+    password: your_password
+    concerned_ports: [1, 2, 3, 4, 5, 6, 7, 8]
+    port_aliases:
+      1: WAN
+      2: NAS
+
+# Alert when a concerned port goes down or link speed drops below this (Mbps)
+min_speed_mbps: 1000
+
+# Email address to receive alerts
+alert_email: user@example.com
+
+# How often to poll switches (seconds)
+check_interval_seconds: 43200
+
+# SMTP settings for sending alert emails
+# Port 465 = SSL (e.g. smtp.qq.com); port 587 = STARTTLS.
+# When smtp_user is set, the From address is the same as smtp_user (required by QQ and many providers).
+smtp:
+  smtp_host: smtp.example.com
+  smtp_port: 587
+  smtp_use_tls: true
+  from_email: switch-monitor@example.com
+  smtp_user: null
+  smtp_password: null
+
+# Logging
+log_dir: logs
+log_file: switch_monitor.log
+# Log level: INFO (default, less noise) or DEBUG (verbose, including library debug)
+log_level: INFO
+# Optional: append one JSON line per check for history (set to null to disable)
+history_file: switch_monitor_history.jsonl

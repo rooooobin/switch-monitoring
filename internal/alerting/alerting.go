@@ -1,0 +1,233 @@
+// Package alerting sends email summaries via SMTP.
+package alerting
+
+import (
+	"bytes"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/smtp"
+	"net/url"
+	"strings"
+	"time"
+
+	"switch-monitor/internal/checker"
+	"switch-monitor/internal/config"
+)
+
+// AlertService sends alerts via configured channels (SMTP, Telegram).
+type AlertService struct {
+	smtp     *config.SMTPConfig
+	toEmail  string
+	telegram *config.TelegramConfig
+}
+
+// New creates an AlertService.
+func New(smtpCfg *config.SMTPConfig, toEmail string, tgCfg *config.TelegramConfig) *AlertService {
+	return &AlertService{
+		smtp:     smtpCfg,
+		toEmail:  toEmail,
+		telegram: tgCfg,
+	}
+}
+
+// SendSummary sends one summary alert with the status table and list of issues.
+func (s *AlertService) SendSummary(
+	statusTable string,
+	events []checker.AlertEvent,
+	portAliasesBySwitch map[string]map[int]string,
+) error {
+	subject := fmt.Sprintf("[Switch Monitor] Summary: %d issue(s)", len(events))
+
+	var body strings.Builder
+	body.WriteString("Port status (concerned ports):\n\n")
+	body.WriteString(statusTable)
+	body.WriteString("\n\n--- Issues ---\n")
+
+	for _, e := range events {
+		var reason string
+		if e.Reason == checker.ReasonDown {
+			reason = "down"
+		} else if e.SpeedMbps != nil {
+			reason = fmt.Sprintf("low speed (%d Mbps)", *e.SpeedMbps)
+		} else {
+			reason = "low speed"
+		}
+		portLabel := fmt.Sprintf("port %d", e.PortID)
+		if aliases, ok := portAliasesBySwitch[e.SwitchName]; ok {
+			if alias, ok2 := aliases[e.PortID]; ok2 && alias != "" {
+				portLabel = fmt.Sprintf("port %d (%s)", e.PortID, alias)
+			}
+		}
+		fmt.Fprintf(&body, "  - %s %s: %s\n", e.SwitchName, portLabel, reason)
+	}
+
+	var errs []string
+
+	if s.smtp != nil && s.smtp.Enabled && s.toEmail != "" {
+		if err := s.sendEmail(subject, body.String()); err != nil {
+			errs = append(errs, fmt.Sprintf("email: %v", err))
+		}
+	}
+
+	if s.telegram != nil && s.telegram.Enabled && s.telegram.Token != "" && s.telegram.ChatID != "" {
+		// Telegram supports basic HTML or Markdown. We'll use MarkdownV2 for monospaced table.
+		tgMsg := fmt.Sprintf("*%s*\n\n```text\n%s\n```", subject, body.String())
+		if err := s.sendTelegram(tgMsg); err != nil {
+			errs = append(errs, fmt.Sprintf("telegram: %v", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("alert failures: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// sendTelegram sends a message via Telegram Bot API.
+func (s *AlertService) sendTelegram(text string) error {
+	urlStr := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", s.telegram.Token)
+	
+	payload := map[string]interface{}{
+		"chat_id":    s.telegram.ChatID,
+		"text":       text,
+		"parse_mode": "MarkdownV2",
+	}
+	
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	
+	req, err := http.NewRequest("POST", urlStr, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	if s.telegram.Proxy != "" {
+		proxyURL, err := url.Parse(s.telegram.Proxy)
+		if err != nil {
+			return fmt.Errorf("invalid telegram proxy URL: %w", err)
+		}
+		client.Transport = &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		}
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("telegram API returned status: %s", resp.Status)
+	}
+	return nil
+}
+
+// sendEmail connects to SMTP, sends one message, and disconnects.
+func (s *AlertService) sendEmail(subject, body string) error {
+	fromAddr := s.smtp.User
+	if fromAddr == "" {
+		fromAddr = s.smtp.FromEmail
+	}
+
+	msg := buildMessage(fromAddr, s.toEmail, subject, body)
+	addr := fmt.Sprintf("%s:%d", s.smtp.Host, s.smtp.Port)
+
+	var auth smtp.Auth
+	if s.smtp.User != "" && s.smtp.Password != "" {
+		auth = smtp.PlainAuth("", s.smtp.User, s.smtp.Password, s.smtp.Host)
+	}
+
+	if s.smtp.Port == 465 {
+		return s.sendSSL(addr, auth, fromAddr, msg)
+	}
+	return s.sendSTARTTLS(addr, auth, fromAddr, msg, s.smtp.UseTLS)
+}
+
+func (s *AlertService) sendSSL(addr string, auth smtp.Auth, from string, msg []byte) error {
+	tlsCfg := &tls.Config{ServerName: s.smtp.Host} //nolint:gosec
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 30 * time.Second}, "tcp", addr, tlsCfg)
+	if err != nil {
+		return fmt.Errorf("SMTP SSL dial: %w", err)
+	}
+	client, err := smtp.NewClient(conn, s.smtp.Host)
+	if err != nil {
+		return fmt.Errorf("SMTP SSL new client: %w", err)
+	}
+	defer client.Quit() //nolint:errcheck
+
+	if auth != nil {
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("SMTP SSL auth: %w", err)
+		}
+	}
+	if err := client.Mail(from); err != nil {
+		return fmt.Errorf("SMTP Mail: %w", err)
+	}
+	if err := client.Rcpt(s.toEmail); err != nil {
+		return fmt.Errorf("SMTP Rcpt: %w", err)
+	}
+	wc, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("SMTP Data: %w", err)
+	}
+	if _, err := wc.Write(msg); err != nil {
+		return fmt.Errorf("SMTP write body: %w", err)
+	}
+	return wc.Close()
+}
+
+func (s *AlertService) sendSTARTTLS(addr string, auth smtp.Auth, from string, msg []byte, useTLS bool) error {
+	client, err := smtp.Dial(addr)
+	if err != nil {
+		return fmt.Errorf("SMTP dial: %w", err)
+	}
+	defer client.Quit() //nolint:errcheck
+
+	if useTLS {
+		tlsCfg := &tls.Config{ServerName: s.smtp.Host} //nolint:gosec
+		if err := client.StartTLS(tlsCfg); err != nil {
+			return fmt.Errorf("SMTP STARTTLS: %w", err)
+		}
+	}
+	if auth != nil {
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("SMTP auth: %w", err)
+		}
+	}
+	if err := client.Mail(from); err != nil {
+		return fmt.Errorf("SMTP Mail: %w", err)
+	}
+	if err := client.Rcpt(s.toEmail); err != nil {
+		return fmt.Errorf("SMTP Rcpt: %w", err)
+	}
+	wc, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("SMTP Data: %w", err)
+	}
+	if _, err := wc.Write(msg); err != nil {
+		return fmt.Errorf("SMTP write body: %w", err)
+	}
+	return wc.Close()
+}
+
+// buildMessage creates a minimal RFC 2822 email message.
+func buildMessage(from, to, subject, body string) []byte {
+	var sb strings.Builder
+	sb.WriteString("From: " + from + "\r\n")
+	sb.WriteString("To: " + to + "\r\n")
+	sb.WriteString("Subject: " + subject + "\r\n")
+	sb.WriteString("MIME-Version: 1.0\r\n")
+	sb.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	sb.WriteString("Date: " + time.Now().UTC().Format(time.RFC1123Z) + "\r\n")
+	sb.WriteString("\r\n")
+	sb.WriteString(body)
+	return []byte(sb.String())
+}

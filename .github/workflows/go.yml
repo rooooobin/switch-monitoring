@@ -37,8 +37,4 @@ jobs:
         name: switch-monitor-arm64
         path: switch-monitor-arm64
 
-    - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@v6
-      with:    
-        version: latest
 

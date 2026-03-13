@@ -1,0 +1,7 @@
+# running config
+config.yaml
+# logs
+logs/
+# build artifacts
+switch-monitor-arm64
+

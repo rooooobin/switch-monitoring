@@ -136,15 +136,31 @@ func (r *Runner) RunOnce() {
 		swName := entry.cfg.Name
 		rowsBySwitch[swName] = nil
 
-		statuses, err := entry.adapter.GetPortStatuses()
-		
-		// Always attempt to logout to free the session
-		if logoutErr := entry.adapter.Logout(); logoutErr != nil {
-			slog.Debug("Failed to logout", "switch", swName, "error", logoutErr)
+		var statuses []model.PortStatus
+		var err error
+
+		// Retry logic for transient HTTP timeouts
+		maxRetries := 3
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			statuses, err = entry.adapter.GetPortStatuses()
+			
+			// Always attempt to logout to free the session
+			if logoutErr := entry.adapter.Logout(); logoutErr != nil {
+				slog.Debug("Failed to logout", "switch", swName, "error", logoutErr)
+			}
+
+			if err == nil {
+				break
+			}
+			
+			if attempt < maxRetries {
+				slog.Warn("Failed to poll switch, retrying...", "switch", swName, "attempt", attempt, "error", err)
+				time.Sleep(time.Duration(attempt*5) * time.Second)
+			}
 		}
 
 		if err != nil {
-			slog.Error("Failed to poll switch", "switch", swName, "error", err)
+			slog.Error("Failed to poll switch after retries", "switch", swName, "error", err)
 			continue
 		}
 

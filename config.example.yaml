@@ -39,6 +39,9 @@ alert_emails:
 # How often to poll switches (seconds)
 check_interval_seconds: 43200
 
+# How often to recheck pending alerts before sending (seconds)
+recheck_interval_seconds: 5
+
 # SMTP settings for sending alert emails
 # Port 465 = SSL (e.g. smtp.qq.com); port 587 = STARTTLS.
 # When smtp_user is set, the From address is the same as smtp_user (required by QQ and many providers).

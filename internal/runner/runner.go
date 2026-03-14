@@ -236,7 +236,7 @@ func (r *Runner) RunOnce() {
 				continue
 			}
 			swTable := FormatAlertTable(rows, false)
-			alertParts = append(alertParts, fmt.Sprintf("?? %s\n%s", sw.Name, swTable))
+			alertParts = append(alertParts, fmt.Sprintf("🔌 %s\n%s", sw.Name, swTable))
 		}
 
 		aliasesBySwitch := make(map[string]map[int]string, len(r.cfg.Switches))
@@ -267,6 +267,13 @@ func (r *Runner) RunLoop(once bool) {
 	for {
 		r.reloadIfChanged()
 		r.RunOnce()
-		time.Sleep(time.Duration(r.cfg.CheckIntervalSeconds) * time.Second)
+		
+		sleepSecs := r.cfg.CheckIntervalSeconds
+		if r.checker.HasAnyPending() {
+			sleepSecs = r.cfg.RecheckIntervalSeconds
+			slog.Debug("Pending alerts detected, using recheck interval", "seconds", sleepSecs)
+		}
+		
+		time.Sleep(time.Duration(sleepSecs) * time.Second)
 	}
 }

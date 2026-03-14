@@ -26,25 +26,30 @@ jobs:
       run: go mod download
 
     - name: Verify dependencies
-      run: go mod tidy
+      run: |
+        go mod tidy
+        git diff --exit-code
 
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v6
       with:
-        version:  lastest
-        args: --timeout=5m --new-from-rev=HEAD~1
+        version: latest
+        args: --timeout=5m
 
     - name: Build
       run: |
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o switch-monitor-amd64 ./cmd/switch-monitor
         CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o switch-monitor-arm64 ./cmd/switch-monitor
 
     - name: Test
       run: go test -v ./...
 
-    - name: Upload binary
+    - name: Upload binaries
       uses: actions/upload-artifact@v4
       with:
-        name: switch-monitor-arm64
-        path: switch-monitor-arm64
+        name: switch-monitor-binaries
+        path: |
+          switch-monitor-amd64
+          switch-monitor-arm64
 
 

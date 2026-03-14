@@ -75,7 +75,11 @@ func AppendHistory(historyPath, switchName string, portID int, linkUp bool, spee
 	if err != nil {
 		return fmt.Errorf("open history file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	rec := historyRecord{
 		TS:        time.Now().UTC().Format(time.RFC3339),

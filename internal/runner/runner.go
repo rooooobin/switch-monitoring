@@ -199,7 +199,6 @@ func (r *Runner) RunOnce() {
 	}
 
 	// Print per-switch tables
-	var allTableParts []string
 	for _, sw := range r.cfg.Switches {
 		rows := rowsBySwitch[sw.Name]
 		if len(rows) == 0 {
@@ -207,7 +206,6 @@ func (r *Runner) RunOnce() {
 		}
 		header := fmt.Sprintf("=== %s ===", sw.Name)
 		table := FormatStatusTable(rows, false)
-		allTableParts = append(allTableParts, header+"\n"+table)
 		fmt.Println(header)
 		fmt.Println(table)
 	}

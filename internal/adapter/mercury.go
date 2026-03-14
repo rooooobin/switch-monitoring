@@ -53,7 +53,7 @@ func (a *MercuryAdapter) login() error {
 		// Network error — attempt unauthenticated access
 		return a.checkUnauthenticated()
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 
 	// Store any session cookie
@@ -76,7 +76,7 @@ func (a *MercuryAdapter) checkUnauthenticated() error {
 	if err != nil {
 		return fmt.Errorf("mercury %s: unreachable: %w", a.host, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == 200 && strings.Contains(string(body), "info_ds") {
 		return nil // pages accessible without auth
@@ -103,7 +103,7 @@ func (a *MercuryAdapter) get(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	return string(body), err
 }

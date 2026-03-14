@@ -19,15 +19,20 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25'
+        go-version-file: go.mod
+        cache: true
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Verify dependencies
+      run: go mod tidy
 
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v6
       with:
-        version:  v1.57.2 # Or another version supporting Go 1.25
-
-    - name: Verify dependencies
-      run: go mod tidy        
+        version:  lastest
+        args: --timeout=5m --new-from-rev=HEAD~1
 
     - name: Build
       run: |
@@ -35,7 +40,7 @@ jobs:
 
     - name: Test
       run: go test -v ./...
-    
+
     - name: Upload binary
       uses: actions/upload-artifact@v4
       with:

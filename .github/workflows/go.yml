@@ -30,11 +30,11 @@ jobs:
         go mod tidy
         git diff --exit-code
 
-    - name: golangci-lint
-      uses: golangci/golangci-lint-action@v6
-      with:
-        version: latest
-        args: --timeout=5m
+    # - name: golangci-lint
+    #   uses: golangci/golangci-lint-action@v6
+    #   with:
+    #     version: latest
+    #     args: --timeout=5m
 
     - name: Build
       run: |

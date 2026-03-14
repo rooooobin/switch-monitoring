@@ -28,7 +28,7 @@ jobs:
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v6
       with:
-        version: latest
+        version:  v1.57.2 # Or another version supporting Go 1.25
 
     - name: Verify dependencies
       run: |

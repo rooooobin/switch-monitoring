@@ -11,6 +11,7 @@ Polls port link status and speed, prints a summary table, and sends alerts when 
 - Supports **Netgear GS108Ev3** (password-only, MD5 hashed auth) and **Mercury SG108 Pro** (username/password)
 - Configurable concerned ports, port aliases, and minimum speed threshold
 - Transition-based alerting (alerts only on state changes, not every poll)
+- Double-confirmation backoff (temporarily shortens polling interval to verify link downgrades before alerting)
 - **Multiple email recipients** — send to any number of addresses
 - **Multiple Telegram bots/chats** — each with its own token, chat ID, and optional proxy
 - SMTP email with port-465 SSL and port-587 STARTTLS support
@@ -83,6 +84,7 @@ The file is watched for changes between every poll cycle — no restart required
 | `alert_emails` | — | List of email recipients (or single `alert_email` for backwards compatibility) |
 | `min_speed_mbps` | `1000` | Alert if link speed drops below this value |
 | `check_interval_seconds` | `60` | Polling interval in seconds |
+| `recheck_interval_seconds` | `5` | Shortened polling interval used to double-confirm pending alerts |
 
 ### SMTP
 

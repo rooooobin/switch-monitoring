@@ -58,7 +58,7 @@ func (a *NetgearAdapter) login() error {
 		return fmt.Errorf("netgear %s: GET login.cgi: %w", a.host, err)
 	}
 	body, err := func() ([]byte, error) {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		return io.ReadAll(resp.Body)
 	}()
 	if err != nil {
@@ -82,7 +82,7 @@ func (a *NetgearAdapter) login() error {
 	if err != nil {
 		return fmt.Errorf("netgear %s: POST login.cgi: %w", a.host, err)
 	}
-	defer postResp.Body.Close()
+	defer func() { _ = postResp.Body.Close() }()
 
 	slog.Debug("netgear login response", "status", postResp.StatusCode)
 	for k, v := range postResp.Header {
@@ -153,7 +153,7 @@ func (a *NetgearAdapter) post(path string, vals url.Values) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, err := io.ReadAll(resp.Body)
 	return string(b), err
 }
@@ -168,9 +168,30 @@ func (a *NetgearAdapter) get(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, err := io.ReadAll(resp.Body)
 	return string(b), err
+}
+
+// Logout terminates the current session on the switch.
+func (a *NetgearAdapter) Logout() error {
+	if a.rawCookie == "" {
+		return nil
+	}
+	
+	logoutURL := "/logout.cgi"
+	if a.hashID != "" {
+		logoutURL += "?id=" + a.hashID
+	}
+	
+	slog.Debug("netgear logout request", "host", a.host)
+	_, err := a.get(logoutURL)
+	
+	// Always clear session state locally
+	a.rawCookie = ""
+	a.hashID = ""
+	
+	return err
 }
 
 // GetPortStatuses returns status for all 8 ports.
@@ -434,32 +455,6 @@ func reInputValue(body, name string) []string {
 			vals = append(vals, m[1])
 		}
 	}
-	return vals
-}
-
-func inputsByName(n *html.Node, name string) []string {
-	var vals []string
-	var walk func(*html.Node)
-	walk = func(node *html.Node) {
-		if node.Type == html.ElementNode && node.Data == "input" {
-			var nm, val string
-			for _, a := range node.Attr {
-				switch a.Key {
-				case "name":
-					nm = a.Val
-				case "value":
-					val = a.Val
-				}
-			}
-			if nm == name {
-				vals = append(vals, val)
-			}
-		}
-		for c := node.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(n)
 	return vals
 }
 

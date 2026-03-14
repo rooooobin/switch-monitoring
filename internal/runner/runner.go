@@ -19,6 +19,7 @@ import (
 // switchAdapter is the common interface for all switch adapters.
 type switchAdapter interface {
 	GetPortStatuses() ([]model.PortStatus, error)
+	Logout() error
 }
 
 // adapterEntry pairs a config with its adapter.
@@ -136,6 +137,12 @@ func (r *Runner) RunOnce() {
 		rowsBySwitch[swName] = nil
 
 		statuses, err := entry.adapter.GetPortStatuses()
+		
+		// Always attempt to logout to free the session
+		if logoutErr := entry.adapter.Logout(); logoutErr != nil {
+			slog.Debug("Failed to logout", "switch", swName, "error", logoutErr)
+		}
+
 		if err != nil {
 			slog.Error("Failed to poll switch", "switch", swName, "error", err)
 			continue
@@ -192,7 +199,6 @@ func (r *Runner) RunOnce() {
 	}
 
 	// Print per-switch tables
-	var allTableParts []string
 	for _, sw := range r.cfg.Switches {
 		rows := rowsBySwitch[sw.Name]
 		if len(rows) == 0 {
@@ -200,7 +206,6 @@ func (r *Runner) RunOnce() {
 		}
 		header := fmt.Sprintf("=== %s ===", sw.Name)
 		table := FormatStatusTable(rows, false)
-		allTableParts = append(allTableParts, header+"\n"+table)
 		fmt.Println(header)
 		fmt.Println(table)
 	}
@@ -229,7 +234,7 @@ func (r *Runner) RunOnce() {
 				continue
 			}
 			swTable := FormatAlertTable(rows, false)
-			alertParts = append(alertParts, fmt.Sprintf("?? %s\n%s", sw.Name, swTable))
+			alertParts = append(alertParts, fmt.Sprintf("🔌 %s\n%s", sw.Name, swTable))
 		}
 
 		aliasesBySwitch := make(map[string]map[int]string, len(r.cfg.Switches))
@@ -260,6 +265,13 @@ func (r *Runner) RunLoop(once bool) {
 	for {
 		r.reloadIfChanged()
 		r.RunOnce()
-		time.Sleep(time.Duration(r.cfg.CheckIntervalSeconds) * time.Second)
+		
+		sleepSecs := r.cfg.CheckIntervalSeconds
+		if r.checker.HasAnyPending() {
+			sleepSecs = r.cfg.RecheckIntervalSeconds
+			slog.Debug("Pending alerts detected, using recheck interval", "seconds", sleepSecs)
+		}
+		
+		time.Sleep(time.Duration(sleepSecs) * time.Second)
 	}
 }

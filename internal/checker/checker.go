@@ -30,6 +30,7 @@ type stateKey struct {
 type PortChecker struct {
 	minSpeedMbps int
 	last         map[stateKey]model.PortStatus
+	pending      map[stateKey]AlertEvent
 }
 
 // New creates a PortChecker with the given minimum speed threshold (Mbps).
@@ -37,6 +38,7 @@ func New(minSpeedMbps int) *PortChecker {
 	return &PortChecker{
 		minSpeedMbps: minSpeedMbps,
 		last:         make(map[stateKey]model.PortStatus),
+		pending:      make(map[stateKey]AlertEvent),
 	}
 }
 
@@ -57,32 +59,51 @@ func (c *PortChecker) Check(switchName string, concernedPorts []int, current []m
 		key := stateKey{switchName, portID}
 		prev, hasPrev := c.last[key]
 
-		if !status.LinkUp {
-			// Alert only on down transition
+		isDown := !status.LinkUp
+		isLowSpeed := status.LinkUp && status.SpeedMbps != nil && *status.SpeedMbps < c.minSpeedMbps
+
+		if isDown {
 			if !hasPrev || prev.LinkUp {
-				events = append(events, AlertEvent{
+				// Transition to down. Mark pending.
+				c.pending[key] = AlertEvent{
 					SwitchName: switchName,
 					PortID:     portID,
 					Reason:     ReasonDown,
 					LinkUp:     false,
-				})
+				}
+			} else if pendingEvent, ok := c.pending[key]; ok && pendingEvent.Reason == ReasonDown {
+				// Double confirmed.
+				events = append(events, pendingEvent)
+				delete(c.pending, key)
 			}
-		} else if status.SpeedMbps != nil && *status.SpeedMbps < c.minSpeedMbps {
-			// Alert only on transition to low speed
+		} else if isLowSpeed {
 			prevOK := !hasPrev || prev.SpeedMbps == nil || *prev.SpeedMbps >= c.minSpeedMbps
-			if prevOK {
+			if prevOK || (hasPrev && !prev.LinkUp) {
+				// Transition to low speed. Mark pending.
 				sp := *status.SpeedMbps
-				events = append(events, AlertEvent{
+				c.pending[key] = AlertEvent{
 					SwitchName: switchName,
 					PortID:     portID,
 					Reason:     ReasonLowSpeed,
 					LinkUp:     true,
 					SpeedMbps:  &sp,
-				})
+				}
+			} else if pendingEvent, ok := c.pending[key]; ok && pendingEvent.Reason == ReasonLowSpeed {
+				// Double confirmed.
+				events = append(events, pendingEvent)
+				delete(c.pending, key)
 			}
+		} else {
+			// Normal state
+			delete(c.pending, key)
 		}
 
 		c.last[key] = status
 	}
 	return events
+}
+
+// HasAnyPending returns true if there are any pending alert events.
+func (c *PortChecker) HasAnyPending() bool {
+	return len(c.pending) > 0
 }

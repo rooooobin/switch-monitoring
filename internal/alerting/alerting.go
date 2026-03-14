@@ -19,9 +19,9 @@ import (
 
 // AlertService sends alerts via configured channels (SMTP, Telegram).
 type AlertService struct {
-	smtp        *config.SMTPConfig
-	toEmails    []string
-	telegram    *config.TelegramConfig
+	smtp     *config.SMTPConfig
+	toEmails []string
+	telegram *config.TelegramConfig
 }
 
 // New creates an AlertService.
@@ -50,7 +50,7 @@ func (s *AlertService) SendSummary(
 	body.WriteString(strings.Repeat("=", 40))
 
 	if len(events) > 0 {
-		body.WriteString(fmt.Sprintf("\nIssues (%d):\n", len(events)))
+		fmt.Fprintf(&body, "\nIssues (%d):\n", len(events))
 		for _, e := range events {
 			var reason string
 			if e.Reason == checker.ReasonDown {
@@ -83,7 +83,7 @@ func (s *AlertService) SendSummary(
 	if s.telegram != nil && s.telegram.Enabled && len(s.telegram.Recipients) > 0 {
 		var tgBody strings.Builder
 		if len(events) > 0 {
-			tgBody.WriteString(fmt.Sprintf("Issues: %d\n\n", len(events)))
+			fmt.Fprintf(&tgBody, "Issues: %d\n\n", len(events))
 		}
 		tgBody.WriteString(strings.Join(alertParts, "\n\n"))
 		if len(events) > 0 {
@@ -156,7 +156,7 @@ func (s *AlertService) sendTelegramTo(text string, r config.TelegramRecipient) e
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("telegram API returned status: %s", resp.Status)

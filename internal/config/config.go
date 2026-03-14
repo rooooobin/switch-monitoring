@@ -73,16 +73,17 @@ type TelegramConfig struct {
 
 // MonitorConfig is the top-level configuration.
 type MonitorConfig struct {
-	Switches             []SwitchConfig  `yaml:"switches"`
-	AlertEmails          []string        `yaml:"alert_emails"`
-	MinSpeedMbps         int             `yaml:"min_speed_mbps"`
-	CheckIntervalSeconds int             `yaml:"check_interval_seconds"`
-	SMTP                 *SMTPConfig     `yaml:"smtp"`
-	Telegram             *TelegramConfig `yaml:"telegram"`
-	LogDir               string          `yaml:"log_dir"`
-	LogFile              string          `yaml:"log_file"`
-	HistoryFile          string          `yaml:"history_file"`
-	LogLevel             string          `yaml:"log_level"`
+	Switches               []SwitchConfig  `yaml:"switches"`
+	AlertEmails            []string        `yaml:"alert_emails"`
+	MinSpeedMbps           int             `yaml:"min_speed_mbps"`
+	CheckIntervalSeconds   int             `yaml:"check_interval_seconds"`
+	RecheckIntervalSeconds int             `yaml:"recheck_interval_seconds"`
+	SMTP                   *SMTPConfig     `yaml:"smtp"`
+	Telegram               *TelegramConfig `yaml:"telegram"`
+	LogDir                 string          `yaml:"log_dir"`
+	LogFile                string          `yaml:"log_file"`
+	HistoryFile            string          `yaml:"history_file"`
+	LogLevel               string          `yaml:"log_level"`
 }
 
 // rawYAML mirrors the YAML structure for flexible parsing.
@@ -97,11 +98,12 @@ type rawYAML struct {
 		PortAliases    map[string]string `yaml:"port_aliases"`
 	} `yaml:"switches"`
 	// alert_email (single, legacy) and alert_emails (list) are both accepted.
-	AlertEmail           string      `yaml:"alert_email"`
-	AlertEmails          interface{} `yaml:"alert_emails"`
-	MinSpeedMbps         int         `yaml:"min_speed_mbps"`
-	CheckIntervalSeconds int         `yaml:"check_interval_seconds"`
-	SMTP                 *struct {
+	AlertEmail             string      `yaml:"alert_email"`
+	AlertEmails            interface{} `yaml:"alert_emails"`
+	MinSpeedMbps           int         `yaml:"min_speed_mbps"`
+	CheckIntervalSeconds   int         `yaml:"check_interval_seconds"`
+	RecheckIntervalSeconds int         `yaml:"recheck_interval_seconds"`
+	SMTP                   *struct {
 		Enabled   bool   `yaml:"enabled"`
 		Host      string `yaml:"smtp_host"`
 		Port      int    `yaml:"smtp_port"`
@@ -142,19 +144,23 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 	}
 
 	cfg := &MonitorConfig{
-		MinSpeedMbps:         raw.MinSpeedMbps,
-		CheckIntervalSeconds: raw.CheckIntervalSeconds,
-		LogDir:               orDefault(raw.LogDir, "logs"),
-		LogFile:              orDefault(raw.LogFile, "switch_monitor.log"),
-		HistoryFile:          raw.HistoryFile,
-		LogLevel:             strings.ToUpper(orDefault(raw.LogLevel, "INFO")),
-		AlertEmails:          parseEmailList(raw.AlertEmail, raw.AlertEmails),
+		MinSpeedMbps:           raw.MinSpeedMbps,
+		CheckIntervalSeconds:   raw.CheckIntervalSeconds,
+		RecheckIntervalSeconds: raw.RecheckIntervalSeconds,
+		LogDir:                 orDefault(raw.LogDir, "logs"),
+		LogFile:                orDefault(raw.LogFile, "switch_monitor.log"),
+		HistoryFile:            raw.HistoryFile,
+		LogLevel:               strings.ToUpper(orDefault(raw.LogLevel, "INFO")),
+		AlertEmails:            parseEmailList(raw.AlertEmail, raw.AlertEmails),
 	}
 	if cfg.MinSpeedMbps == 0 {
 		cfg.MinSpeedMbps = 1000
 	}
 	if cfg.CheckIntervalSeconds == 0 {
 		cfg.CheckIntervalSeconds = 60
+	}
+	if cfg.RecheckIntervalSeconds == 0 {
+		cfg.RecheckIntervalSeconds = 5
 	}
 
 	for _, e := range raw.Switches {

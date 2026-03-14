@@ -155,7 +155,7 @@ func (r *Runner) RunOnce() {
 			
 			if attempt < maxRetries {
 				slog.Warn("Failed to poll switch, retrying...", "switch", swName, "attempt", attempt, "error", err)
-				time.Sleep(time.Duration(attempt*5) * time.Second)
+				time.Sleep(time.Duration(attempt*2) * time.Second)
 			}
 		}
 

@@ -18,15 +18,23 @@ const (
 	TypeMercurySG108Pro SwitchType = "mercury_sg108pro"
 )
 
+// CalendarProvider selects the calendar API backend.
+type CalendarProvider string
+
+const (
+	CalendarGoogle    CalendarProvider = "google"
+	CalendarMicrosoft CalendarProvider = "microsoft"
+)
+
 // SwitchConfig holds per-switch settings.
 type SwitchConfig struct {
-	Name           string            `yaml:"name"`
-	AdminURL       string            `yaml:"admin_url"`
-	Type           SwitchType        `yaml:"type"`
-	ConcernedPorts []int             `yaml:"concerned_ports"`
-	Password       string            `yaml:"password"`
-	Username       string            `yaml:"username"`
-	PortAliases    map[int]string    `yaml:"port_aliases"`
+	Name           string         `yaml:"name"`
+	AdminURL       string         `yaml:"admin_url"`
+	Type           SwitchType     `yaml:"type"`
+	ConcernedPorts []int          `yaml:"concerned_ports"`
+	Password       string         `yaml:"password"`
+	Username       string         `yaml:"username"`
+	PortAliases    map[int]string `yaml:"port_aliases"`
 }
 
 // Host extracts the hostname/IP from AdminURL.
@@ -49,13 +57,13 @@ func (s *SwitchConfig) Host() string {
 
 // SMTPConfig holds email-send settings.
 type SMTPConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	Host     string `yaml:"smtp_host"`
-	Port     int    `yaml:"smtp_port"`
-	UseTLS   bool   `yaml:"smtp_use_tls"`
+	Enabled   bool   `yaml:"enabled"`
+	Host      string `yaml:"smtp_host"`
+	Port      int    `yaml:"smtp_port"`
+	UseTLS    bool   `yaml:"smtp_use_tls"`
 	FromEmail string `yaml:"from_email"`
-	User     string `yaml:"smtp_user"`
-	Password string `yaml:"smtp_password"`
+	User      string `yaml:"smtp_user"`
+	Password  string `yaml:"smtp_password"`
 }
 
 // TelegramRecipient holds settings for a single Telegram bot+chat destination.
@@ -71,6 +79,25 @@ type TelegramConfig struct {
 	Recipients []TelegramRecipient `yaml:"recipients"`
 }
 
+// CalendarConfig holds Google Calendar or Microsoft Outlook (Graph) settings.
+// Obtain OAuth refresh tokens via a one-time browser consent; keep this file private.
+type CalendarConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	Provider   string `yaml:"provider"`
+	Timezone   string `yaml:"timezone"`
+	CalendarID string `yaml:"calendar_id"`
+	Proxy      string `yaml:"proxy"`
+
+	GoogleClientID     string `yaml:"google_client_id"`
+	GoogleClientSecret string `yaml:"google_client_secret"`
+	GoogleRefreshToken string `yaml:"google_refresh_token"`
+
+	MicrosoftTenantID     string `yaml:"microsoft_tenant_id"`
+	MicrosoftClientID     string `yaml:"microsoft_client_id"`
+	MicrosoftClientSecret string `yaml:"microsoft_client_secret"`
+	MicrosoftRefreshToken string `yaml:"microsoft_refresh_token"`
+}
+
 // MonitorConfig is the top-level configuration.
 type MonitorConfig struct {
 	Switches               []SwitchConfig  `yaml:"switches"`
@@ -80,6 +107,7 @@ type MonitorConfig struct {
 	RecheckIntervalSeconds int             `yaml:"recheck_interval_seconds"`
 	SMTP                   *SMTPConfig     `yaml:"smtp"`
 	Telegram               *TelegramConfig `yaml:"telegram"`
+	Calendar               *CalendarConfig `yaml:"calendar"`
 	LogDir                 string          `yaml:"log_dir"`
 	LogFile                string          `yaml:"log_file"`
 	HistoryFile            string          `yaml:"history_file"`
@@ -113,7 +141,7 @@ type rawYAML struct {
 		Password  string `yaml:"smtp_password"`
 	} `yaml:"smtp"`
 	Telegram *struct {
-		Enabled    bool   `yaml:"enabled"`
+		Enabled bool `yaml:"enabled"`
 		// Single recipient (legacy)
 		Token  string `yaml:"token"`
 		ChatID string `yaml:"chat_id"`
@@ -125,10 +153,49 @@ type rawYAML struct {
 			Proxy  string `yaml:"proxy"`
 		} `yaml:"recipients"`
 	} `yaml:"telegram"`
+	Calendar *struct {
+		Enabled               bool   `yaml:"enabled"`
+		Provider              string `yaml:"provider"`
+		Timezone              string `yaml:"timezone"`
+		CalendarID            string `yaml:"calendar_id"`
+		Proxy                 string `yaml:"proxy"`
+		GoogleClientID        string `yaml:"google_client_id"`
+		GoogleClientSecret    string `yaml:"google_client_secret"`
+		GoogleRefreshToken    string `yaml:"google_refresh_token"`
+		MicrosoftTenantID     string `yaml:"microsoft_tenant_id"`
+		MicrosoftClientID     string `yaml:"microsoft_client_id"`
+		MicrosoftClientSecret string `yaml:"microsoft_client_secret"`
+		MicrosoftRefreshToken string `yaml:"microsoft_refresh_token"`
+	} `yaml:"calendar"`
 	LogDir      string `yaml:"log_dir"`
 	LogFile     string `yaml:"log_file"`
 	HistoryFile string `yaml:"history_file"`
 	LogLevel    string `yaml:"log_level"`
+}
+
+func validateCalendar(c *CalendarConfig) error {
+	if c == nil || !c.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.Timezone) == "" {
+		return fmt.Errorf("calendar: timezone is required when calendar is enabled")
+	}
+	p := strings.ToLower(strings.TrimSpace(c.Provider))
+	if p != string(CalendarGoogle) && p != string(CalendarMicrosoft) {
+		return fmt.Errorf("calendar: invalid provider %q (use google or microsoft)", c.Provider)
+	}
+	switch CalendarProvider(p) {
+	case CalendarGoogle:
+		if strings.TrimSpace(c.GoogleClientID) == "" || strings.TrimSpace(c.GoogleClientSecret) == "" || strings.TrimSpace(c.GoogleRefreshToken) == "" {
+			return fmt.Errorf("calendar: google_client_id, google_client_secret, and google_refresh_token are required")
+		}
+	case CalendarMicrosoft:
+		if strings.TrimSpace(c.MicrosoftTenantID) == "" || strings.TrimSpace(c.MicrosoftClientID) == "" ||
+			strings.TrimSpace(c.MicrosoftClientSecret) == "" || strings.TrimSpace(c.MicrosoftRefreshToken) == "" {
+			return fmt.Errorf("calendar: microsoft_tenant_id, microsoft_client_id, microsoft_client_secret, and microsoft_refresh_token are required")
+		}
+	}
+	return nil
 }
 
 // LoadConfig reads and validates a YAML config file.
@@ -228,6 +295,27 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 			})
 		}
 		cfg.Telegram = tg
+	}
+
+	if raw.Calendar != nil {
+		cfg.Calendar = &CalendarConfig{
+			Enabled:               raw.Calendar.Enabled,
+			Provider:              strings.TrimSpace(raw.Calendar.Provider),
+			Timezone:              strings.TrimSpace(raw.Calendar.Timezone),
+			CalendarID:            strings.TrimSpace(raw.Calendar.CalendarID),
+			Proxy:                 strings.TrimSpace(raw.Calendar.Proxy),
+			GoogleClientID:        strings.TrimSpace(raw.Calendar.GoogleClientID),
+			GoogleClientSecret:    strings.TrimSpace(raw.Calendar.GoogleClientSecret),
+			GoogleRefreshToken:    strings.TrimSpace(raw.Calendar.GoogleRefreshToken),
+			MicrosoftTenantID:     strings.TrimSpace(raw.Calendar.MicrosoftTenantID),
+			MicrosoftClientID:     strings.TrimSpace(raw.Calendar.MicrosoftClientID),
+			MicrosoftClientSecret: strings.TrimSpace(raw.Calendar.MicrosoftClientSecret),
+			MicrosoftRefreshToken: strings.TrimSpace(raw.Calendar.MicrosoftRefreshToken),
+		}
+	}
+
+	if err := validateCalendar(cfg.Calendar); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil

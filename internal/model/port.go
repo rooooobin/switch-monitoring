@@ -3,8 +3,8 @@ package model
 
 // PortStatus holds normalized status for a single switch port.
 type PortStatus struct {
-	PortID   int
-	LinkUp   bool
+	PortID    int
+	LinkUp    bool
 	SpeedMbps *int // nil if down or unknown
 
 	// Packet statistics (Mercury)

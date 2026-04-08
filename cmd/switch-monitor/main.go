@@ -15,6 +15,7 @@ func main() {
 	cfgPath := flag.String("config", "config.yaml", "path to YAML config file")
 	once := flag.Bool("once", false, "run one check cycle and exit (useful for cron)")
 	noEmail := flag.Bool("no-email", false, "skip sending email alerts (useful for testing)")
+	noCalendar := flag.Bool("no-calendar", false, "skip calendar repair events (useful for testing)")
 	flag.Parse()
 
 	cfg, err := config.LoadConfig(*cfgPath)
@@ -28,6 +29,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	r := runner.New(cfg, *cfgPath, *noEmail)
+	r := runner.New(cfg, *cfgPath, *noEmail, *noCalendar)
 	r.RunLoop(*once)
 }

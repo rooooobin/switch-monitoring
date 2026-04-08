@@ -2,6 +2,7 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"switch-monitor/internal/adapter"
 	"switch-monitor/internal/alerting"
+	"switch-monitor/internal/calendar"
 	"switch-monitor/internal/checker"
 	"switch-monitor/internal/config"
 	"switch-monitor/internal/logging"
@@ -33,20 +35,23 @@ type Runner struct {
 	cfg          *config.MonitorConfig
 	cfgPath      string
 	noEmail      bool
+	noCalendar   bool
 	checker      *checker.PortChecker
 	alertService *alerting.AlertService
+	calendar     calendar.Upserter
 	adapters     []adapterEntry
 	historyPath  string
 	cfgModTime   time.Time
 }
 
 // New creates a Runner from the given config.
-func New(cfg *config.MonitorConfig, cfgPath string, noEmail bool) *Runner {
+func New(cfg *config.MonitorConfig, cfgPath string, noEmail, noCalendar bool) *Runner {
 	r := &Runner{
-		cfg:     cfg,
-		cfgPath: cfgPath,
-		noEmail: noEmail,
-		checker: checker.New(cfg.MinSpeedMbps),
+		cfg:        cfg,
+		cfgPath:    cfgPath,
+		noEmail:    noEmail,
+		noCalendar: noCalendar,
+		checker:    checker.New(cfg.MinSpeedMbps),
 	}
 	r.applyConfig(cfg)
 	return r
@@ -73,6 +78,16 @@ func (r *Runner) applyConfig(cfg *config.MonitorConfig) {
 		r.alertService = alerting.New(cfg.SMTP, cfg.AlertEmails, cfg.Telegram)
 	} else {
 		r.alertService = nil
+	}
+
+	r.calendar = nil
+	if !r.noCalendar && cfg.Calendar != nil && cfg.Calendar.Enabled {
+		cal, err := calendar.NewFromConfig(cfg.Calendar)
+		if err != nil {
+			slog.Error("Calendar init failed", "error", err)
+		} else {
+			r.calendar = cal
+		}
 	}
 
 	if cfg.HistoryFile != "" {
@@ -143,7 +158,7 @@ func (r *Runner) RunOnce() {
 		maxRetries := 3
 		for attempt := 1; attempt <= maxRetries; attempt++ {
 			statuses, err = entry.adapter.GetPortStatuses()
-			
+
 			// Always attempt to logout to free the session
 			if logoutErr := entry.adapter.Logout(); logoutErr != nil {
 				slog.Debug("Failed to logout", "switch", swName, "error", logoutErr)
@@ -152,7 +167,7 @@ func (r *Runner) RunOnce() {
 			if err == nil {
 				break
 			}
-			
+
 			if attempt < maxRetries {
 				slog.Warn("Failed to poll switch, retrying...", "switch", swName, "attempt", attempt, "error", err)
 				time.Sleep(time.Duration(attempt*2) * time.Second)
@@ -235,32 +250,41 @@ func (r *Runner) RunOnce() {
 		"switches", len(rowsBySwitch),
 	)
 
-	// Send summary alert when there are events
-	if len(runEvents) > 0 {
-		if r.alertService == nil {
-			slog.Warn("No SMTP/Telegram configured; issues not alerted", "count", len(runEvents))
-			return
-		}
+	if len(runEvents) == 0 {
+		return
+	}
 
-		// Build pretty alert table
-		var alertParts []string
-		for _, sw := range r.cfg.Switches {
-			rows := rowsBySwitch[sw.Name]
-			if len(rows) == 0 {
-				continue
-			}
-			swTable := FormatAlertTable(rows, false)
-			alertParts = append(alertParts, fmt.Sprintf("🔌 %s\n%s", sw.Name, swTable))
+	var alertParts []string
+	for _, sw := range r.cfg.Switches {
+		rows := rowsBySwitch[sw.Name]
+		if len(rows) == 0 {
+			continue
 		}
+		swTable := FormatAlertTable(rows, false)
+		alertParts = append(alertParts, fmt.Sprintf("🔌 %s\n%s", sw.Name, swTable))
+	}
 
-		aliasesBySwitch := make(map[string]map[int]string, len(r.cfg.Switches))
-		for _, sw := range r.cfg.Switches {
-			aliasesBySwitch[sw.Name] = sw.PortAliases
-		}
+	aliasesBySwitch := make(map[string]map[int]string, len(r.cfg.Switches))
+	for _, sw := range r.cfg.Switches {
+		aliasesBySwitch[sw.Name] = sw.PortAliases
+	}
+
+	if r.alertService != nil {
 		if err := r.alertService.SendSummary(alertParts, runEvents, aliasesBySwitch); err != nil {
 			slog.Error("Failed to send summary alert", "error", err)
 		} else {
 			slog.Info("Sent summary alert", "issues", len(runEvents))
+		}
+	} else {
+		slog.Warn("No SMTP/Telegram configured; issues not alerted", "count", len(runEvents))
+	}
+
+	if r.calendar != nil {
+		desc := alerting.BuildSummaryBody(alertParts, runEvents, aliasesBySwitch)
+		if err := r.calendar.UpsertRepairEvent(context.Background(), time.Now(), desc); err != nil {
+			slog.Error("Calendar upsert failed", "error", err)
+		} else {
+			slog.Info("Updated calendar repair event", "issues", len(runEvents))
 		}
 	}
 }
@@ -281,13 +305,13 @@ func (r *Runner) RunLoop(once bool) {
 	for {
 		r.reloadIfChanged()
 		r.RunOnce()
-		
+
 		sleepSecs := r.cfg.CheckIntervalSeconds
 		if r.checker.HasAnyPending() {
 			sleepSecs = r.cfg.RecheckIntervalSeconds
 			slog.Debug("Pending alerts detected, using recheck interval", "seconds", sleepSecs)
 		}
-		
+
 		time.Sleep(time.Duration(sleepSecs) * time.Second)
 	}
 }

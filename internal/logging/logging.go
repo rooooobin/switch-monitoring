@@ -55,11 +55,11 @@ func parseLevel(s string) slog.Level {
 
 // historyRecord mirrors the Python JSONL history format.
 type historyRecord struct {
-	TS        string  `json:"ts"`
-	Switch    string  `json:"switch"`
-	Port      int     `json:"port"`
-	LinkUp    bool    `json:"link_up"`
-	SpeedMbps *int    `json:"speed_mbps"`
+	TS        string `json:"ts"`
+	Switch    string `json:"switch"`
+	Port      int    `json:"port"`
+	LinkUp    bool   `json:"link_up"`
+	SpeedMbps *int   `json:"speed_mbps"`
 }
 
 // AppendHistory appends one JSON line to the history file.

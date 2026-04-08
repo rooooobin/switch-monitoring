@@ -269,11 +269,11 @@ func FormatAlertTable(rows []statusRow, includeSwitchColumn bool) string {
 	}
 
 	// Calculate column widths
-	colPort := 4 // "Port"
+	colPort := 4   // "Port"
 	colStatus := 6 // "Status"
-	colSpeed := 4 // "Mbps"
-	colTx := 2 // "Tx"
-	colRx := 2 // "Rx"
+	colSpeed := 4  // "Mbps"
+	colTx := 2     // "Tx"
+	colRx := 2     // "Rx"
 
 	for _, r := range rows {
 		portStr := portDisplay(r)

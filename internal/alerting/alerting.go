@@ -33,14 +33,12 @@ func New(smtpCfg *config.SMTPConfig, toEmails []string, tgCfg *config.TelegramCo
 	}
 }
 
-// SendSummary sends one summary alert with the status table and list of issues.
-func (s *AlertService) SendSummary(
+// BuildSummaryBody returns the plain-text body used for email and calendar descriptions.
+func BuildSummaryBody(
 	alertParts []string,
 	events []checker.AlertEvent,
 	portAliasesBySwitch map[string]map[int]string,
-) error {
-	subject := fmt.Sprintf("[Switch Monitor] Summary: %d issue(s)", len(events))
-
+) string {
 	var body strings.Builder
 	body.WriteString("PORT STATUS\n")
 	body.WriteString(strings.Repeat("=", 40))
@@ -69,12 +67,23 @@ func (s *AlertService) SendSummary(
 			fmt.Fprintf(&body, "  - %s %s: %s\n", e.SwitchName, portLabel, reason)
 		}
 	}
+	return body.String()
+}
+
+// SendSummary sends one summary alert with the status table and list of issues.
+func (s *AlertService) SendSummary(
+	alertParts []string,
+	events []checker.AlertEvent,
+	portAliasesBySwitch map[string]map[int]string,
+) error {
+	subject := fmt.Sprintf("[Switch Monitor] Summary: %d issue(s)", len(events))
+	bodyText := BuildSummaryBody(alertParts, events, portAliasesBySwitch)
 
 	var errs []string
 
 	if s.smtp != nil && s.smtp.Enabled && len(s.toEmails) > 0 {
 		for _, addr := range s.toEmails {
-			if err := s.sendEmail(subject, body.String(), addr); err != nil {
+			if err := s.sendEmail(subject, bodyText, addr); err != nil {
 				errs = append(errs, fmt.Sprintf("email(%s): %v", addr, err))
 			}
 		}

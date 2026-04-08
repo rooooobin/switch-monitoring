@@ -178,19 +178,19 @@ func (a *NetgearAdapter) Logout() error {
 	if a.rawCookie == "" {
 		return nil
 	}
-	
+
 	logoutURL := "/logout.cgi"
 	if a.hashID != "" {
 		logoutURL += "?id=" + a.hashID
 	}
-	
+
 	slog.Debug("netgear logout request", "host", a.host)
 	_, err := a.get(logoutURL)
-	
+
 	// Always clear session state locally
 	a.rawCookie = ""
 	a.hashID = ""
-	
+
 	return err
 }
 

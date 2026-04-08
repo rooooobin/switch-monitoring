@@ -178,7 +178,7 @@ func (a *MercuryAdapter) Logout() error {
 	if a.cookie == nil {
 		return nil
 	}
-	
+
 	_, err := a.get("/LogoutRpm.htm")
 	a.cookie = nil
 	return err
@@ -287,4 +287,3 @@ func parseIntArray(s string) []int {
 	}
 	return out
 }
-

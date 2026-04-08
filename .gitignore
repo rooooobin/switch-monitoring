@@ -1,7 +1,10 @@
+# Cursor IDE
+.cursor/
+
 # running config
 config.yaml
 # logs
 logs/
 # build artifacts
+switch-monitor-amd64
 switch-monitor-arm64
-

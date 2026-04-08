@@ -72,3 +72,22 @@ log_file: switch_monitor.log
 log_level: INFO
 # Optional: append one JSON line per check for history (set to null to disable)
 history_file: switch_monitor_history.jsonl
+
+# Optional: daytime (08:00–20:00 local) calendar event per day when issues are confirmed.
+# One event per calendar day; further issues the same day update that event.
+# Obtain OAuth refresh tokens via a one-time browser consent; keep config.yaml private.
+# proxy: optional HTTP(S) proxy for OAuth and API (same idea as telegram recipients proxy).
+# calendar_id: Google often "primary"; Outlook: Graph calendar id, or omit for default calendar.
+calendar:
+  enabled: false
+  provider: google   # google | microsoft
+  timezone: America/Los_Angeles
+  calendar_id: primary
+  proxy: ""          # e.g. http://127.0.0.1:7890
+  google_client_id: ""
+  google_client_secret: ""
+  google_refresh_token: ""
+  microsoft_tenant_id: ""
+  microsoft_client_id: ""
+  microsoft_client_secret: ""
+  microsoft_refresh_token: ""

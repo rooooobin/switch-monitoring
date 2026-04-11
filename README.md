@@ -16,6 +16,7 @@ Polls port link status and speed, prints a summary table, and sends alerts when 
 - **Multiple Telegram bots/chats** — each with its own token, chat ID, and optional proxy
 - SMTP email with port-465 SSL and port-587 STARTTLS support
 - Telegram Bot API notifications with optional HTTP proxy support
+- **Telegram Command Support** — Manually trigger checks by sending `/check` to your bot
 - Aligned plain-text status table in console output and alert messages
 - **Hot config reload** — edits to `config.yaml` are picked up automatically between poll cycles; no restart needed
 - Structured log file (`slog`) + optional JSONL history per port check
@@ -103,11 +104,20 @@ The file is watched for changes between every poll cycle — no restart required
 | Key | Default | Description |
 |-----|---------|-------------|
 | `telegram.enabled` | `false` | Enable Telegram alerts |
+| `telegram.listen_commands` | `false` | Enable polling for `/check` commands |
 | `telegram.recipients[].token` | — | Telegram Bot API token |
 | `telegram.recipients[].chat_id` | — | Target user or group chat ID |
 | `telegram.recipients[].proxy` | — | Optional HTTP proxy, e.g. `http://127.0.0.1:7890` |
 
 A single legacy `token` / `chat_id` / `proxy` directly under `telegram:` is still accepted and treated as a one-item list.
+
+#### Interacting with the Bot
+
+If `telegram.listen_commands` is set to `true`, `switch-monitor` will listen for messages sent to the configured bot.
+You can send the following command to your bot to manually trigger actions:
+- `/check` - Forces an immediate poll cycle of all configured switches.
+
+*Note: For security, the bot will only respond to commands sent from the exact `chat_id`s defined in your `telegram.recipients` configuration. If you are using a group chat ID, anyone in the group can trigger the command.*
 
 ### Logging
 

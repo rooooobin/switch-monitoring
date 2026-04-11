@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"switch-monitor/internal/adapter"
@@ -16,6 +18,7 @@ import (
 	"switch-monitor/internal/config"
 	"switch-monitor/internal/logging"
 	"switch-monitor/internal/model"
+	"switch-monitor/internal/telegram"
 )
 
 // switchAdapter is the common interface for all switch adapters.
@@ -42,16 +45,18 @@ type Runner struct {
 	adapters     []adapterEntry
 	historyPath  string
 	cfgModTime   time.Time
+	triggerChan  chan struct{}
 }
 
 // New creates a Runner from the given config.
 func New(cfg *config.MonitorConfig, cfgPath string, noEmail, noCalendar bool) *Runner {
 	r := &Runner{
-		cfg:        cfg,
-		cfgPath:    cfgPath,
-		noEmail:    noEmail,
-		noCalendar: noCalendar,
-		checker:    checker.New(cfg.MinSpeedMbps),
+		cfg:         cfg,
+		cfgPath:     cfgPath,
+		noEmail:     noEmail,
+		noCalendar:  noCalendar,
+		checker:     checker.New(cfg.MinSpeedMbps),
+		triggerChan: make(chan struct{}, 1),
 	}
 	r.applyConfig(cfg)
 	return r
@@ -143,7 +148,7 @@ func makeAdapter(sw config.SwitchConfig) switchAdapter {
 }
 
 // RunOnce performs a single poll-and-check cycle.
-func (r *Runner) RunOnce() {
+func (r *Runner) RunOnce(isManual bool) {
 	rowsBySwitch := make(map[string][]statusRow, len(r.adapters))
 	var runEvents []checker.AlertEvent
 
@@ -250,7 +255,7 @@ func (r *Runner) RunOnce() {
 		"switches", len(rowsBySwitch),
 	)
 
-	if len(runEvents) == 0 {
+	if len(runEvents) == 0 && !isManual {
 		return
 	}
 
@@ -270,16 +275,16 @@ func (r *Runner) RunOnce() {
 	}
 
 	if r.alertService != nil {
-		if err := r.alertService.SendSummary(alertParts, runEvents, aliasesBySwitch); err != nil {
+		if err := r.alertService.SendSummary(isManual, alertParts, runEvents, aliasesBySwitch); err != nil {
 			slog.Error("Failed to send summary alert", "error", err)
 		} else {
-			slog.Info("Sent summary alert", "issues", len(runEvents))
+			slog.Info("Sent summary alert", "issues", len(runEvents), "manual", isManual)
 		}
 	} else {
 		slog.Warn("No SMTP/Telegram configured; issues not alerted", "count", len(runEvents))
 	}
 
-	if r.calendar != nil {
+	if r.calendar != nil && len(runEvents) > 0 {
 		desc := alerting.BuildSummaryBody(alertParts, runEvents, aliasesBySwitch)
 		if err := r.calendar.UpsertRepairEvent(context.Background(), time.Now(), desc); err != nil {
 			slog.Error("Calendar upsert failed", "error", err)
@@ -299,12 +304,19 @@ func (r *Runner) RunLoop(once bool) {
 	}
 
 	if once {
-		r.RunOnce()
+		r.RunOnce(false)
 		return
 	}
+
+	// Start telegram polling in the background if enabled
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.pollTelegramCommands(ctx)
+
+	isManual := false
 	for {
 		r.reloadIfChanged()
-		r.RunOnce()
+		r.RunOnce(isManual)
 
 		sleepSecs := r.cfg.CheckIntervalSeconds
 		if r.checker.HasAnyPending() {
@@ -312,6 +324,84 @@ func (r *Runner) RunLoop(once bool) {
 			slog.Debug("Pending alerts detected, using recheck interval", "seconds", sleepSecs)
 		}
 
-		time.Sleep(time.Duration(sleepSecs) * time.Second)
+		timer := time.NewTimer(time.Duration(sleepSecs) * time.Second)
+		select {
+		case <-timer.C:
+			isManual = false
+			// Regular interval check
+		case <-r.triggerChan:
+			timer.Stop()
+			isManual = true
+			slog.Info("Manual check triggered via Telegram")
+		}
+	}
+}
+
+func (r *Runner) pollTelegramCommands(ctx context.Context) {
+	if r.cfg.Telegram == nil || !r.cfg.Telegram.Enabled || !r.cfg.Telegram.ListenCommands || len(r.cfg.Telegram.Recipients) == 0 {
+		return
+	}
+
+	// Create clients for all configured bots that we should listen to
+	// To avoid complexity, we just listen to the first configured bot for commands.
+	recipient := r.cfg.Telegram.Recipients[0]
+	client, err := telegram.NewClient(recipient.Token, recipient.Proxy)
+	if err != nil {
+		slog.Error("Failed to initialize telegram client for polling", "error", err)
+		return
+	}
+
+	offset := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		updates, err := client.GetUpdates(ctx, offset)
+		if err != nil {
+			slog.Debug("Error polling telegram updates", "error", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for _, update := range updates {
+			if update.UpdateID >= offset {
+				offset = update.UpdateID + 1
+			}
+
+			if update.Message == nil || update.Message.Text == "" {
+				continue
+			}
+
+			text := strings.TrimSpace(update.Message.Text)
+			if strings.HasPrefix(text, "/check") {
+				// Verify the sender is one of our configured recipients
+				authorized := false
+				for _, rcfg := range r.cfg.Telegram.Recipients {
+					if strconv.FormatInt(update.Message.Chat.ID, 10) == rcfg.ChatID {
+						authorized = true
+						break
+					}
+				}
+
+				if authorized {
+					slog.Info("Received /check command from authorized telegram chat", "chat_id", update.Message.Chat.ID)
+					// Trigger non-blocking
+					select {
+					case r.triggerChan <- struct{}{}:
+						// Send acknowledgement
+						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "🔄 Manual check triggered...")
+					default:
+						// Already a check pending
+					}
+				} else {
+					slog.Warn("Received /check command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID)
+				}
+			}
+		}
+
+		time.Sleep(2 * time.Second)
 	}
 }

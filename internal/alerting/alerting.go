@@ -2,19 +2,17 @@
 package alerting
 
 import (
-	"bytes"
+	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"net/smtp"
-	"net/url"
 	"strings"
 	"time"
 
 	"switch-monitor/internal/checker"
 	"switch-monitor/internal/config"
+	"switch-monitor/internal/telegram"
 )
 
 // AlertService sends alerts via configured channels (SMTP, Telegram).
@@ -72,11 +70,19 @@ func BuildSummaryBody(
 
 // SendSummary sends one summary alert with the status table and list of issues.
 func (s *AlertService) SendSummary(
+	isManual bool,
 	alertParts []string,
 	events []checker.AlertEvent,
 	portAliasesBySwitch map[string]map[int]string,
 ) error {
-	subject := fmt.Sprintf("[Switch Monitor] Summary: %d issue(s)", len(events))
+	var subject string
+	if len(events) > 0 {
+		subject = fmt.Sprintf("⚠️ [Switch Monitor] Summary: %d issue(s)", len(events))
+	} else if isManual {
+		subject = "✅ [Switch Monitor] Manual Check: All OK"
+	} else {
+		subject = "✅ [Switch Monitor] Summary: All OK"
+	}
 	bodyText := BuildSummaryBody(alertParts, events, portAliasesBySwitch)
 
 	var errs []string
@@ -131,46 +137,15 @@ func (s *AlertService) SendSummary(
 
 // sendTelegramTo sends a message via Telegram Bot API to a specific recipient.
 func (s *AlertService) sendTelegramTo(text string, r config.TelegramRecipient) error {
-	urlStr := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", r.Token)
-
-	payload := map[string]interface{}{
-		"chat_id": r.ChatID,
-		"text":    text,
-	}
-
-	b, err := json.Marshal(payload)
+	client, err := telegram.NewClient(r.Token, r.Proxy)
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", urlStr, bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	if r.Proxy != "" {
-		proxyStr := strings.ReplaceAll(r.Proxy, "localhost", "127.0.0.1")
-		proxyURL, err := url.Parse(proxyStr)
-		if err != nil {
-			return fmt.Errorf("invalid telegram proxy URL: %w", err)
-		}
-		client.Transport = &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
-		}
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("telegram API returned status: %s", resp.Status)
-	}
-	return nil
+	return client.SendMessage(ctx, r.ChatID, text)
 }
 
 // sendEmail connects to SMTP, sends one message to toAddr, and disconnects.

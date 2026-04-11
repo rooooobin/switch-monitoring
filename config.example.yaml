@@ -56,7 +56,9 @@ smtp:
 
 # Telegram bot notifications (multiple bots/chats supported)
 telegram:
-  enabled: true
+  enabled: false
+  # If true, the program will long-poll Telegram for commands (e.g., /check) from configured recipients.
+  listen_commands: false
   recipients:
     - token: "111111111:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
       chat_id: "123456789"

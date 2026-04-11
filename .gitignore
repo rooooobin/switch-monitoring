@@ -1,6 +1,7 @@
 # Cursor IDE
 .cursor/
-
+#NUL file
+NUL
 # running config
 config.yaml
 # logs

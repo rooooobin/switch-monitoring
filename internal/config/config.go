@@ -75,8 +75,9 @@ type TelegramRecipient struct {
 
 // TelegramConfig holds settings for Telegram bot notifications.
 type TelegramConfig struct {
-	Enabled    bool                `yaml:"enabled"`
-	Recipients []TelegramRecipient `yaml:"recipients"`
+	Enabled        bool                `yaml:"enabled"`
+	ListenCommands bool                `yaml:"listen_commands"`
+	Recipients     []TelegramRecipient `yaml:"recipients"`
 }
 
 // CalendarConfig holds Google Calendar or Microsoft Outlook (Graph) settings.
@@ -141,7 +142,8 @@ type rawYAML struct {
 		Password  string `yaml:"smtp_password"`
 	} `yaml:"smtp"`
 	Telegram *struct {
-		Enabled bool `yaml:"enabled"`
+		Enabled        bool `yaml:"enabled"`
+		ListenCommands bool `yaml:"listen_commands"`
 		// Single recipient (legacy)
 		Token  string `yaml:"token"`
 		ChatID string `yaml:"chat_id"`
@@ -275,7 +277,8 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 
 	if raw.Telegram != nil {
 		tg := &TelegramConfig{
-			Enabled: raw.Telegram.Enabled,
+			Enabled:        raw.Telegram.Enabled,
+			ListenCommands: raw.Telegram.ListenCommands,
 		}
 		// Collect recipients from list first, then fall back to single legacy fields.
 		for _, r := range raw.Telegram.Recipients {

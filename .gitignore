@@ -7,5 +7,6 @@ config.yaml
 # logs
 logs/
 # build artifacts
+switch-monitor
 switch-monitor-amd64
 switch-monitor-arm64

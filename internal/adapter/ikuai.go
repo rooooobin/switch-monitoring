@@ -3,6 +3,7 @@ package adapter
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -29,7 +30,12 @@ func NewIkuaiClient(url, username, password string) (*IkuaiClient, error) {
 		url:      strings.TrimSuffix(url, "/"),
 		username: username,
 		password: password,
-		client:   &http.Client{Jar: jar},
+		client: &http.Client{
+			Jar: jar,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		},
 	}, nil
 }
 

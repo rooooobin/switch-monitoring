@@ -399,6 +399,90 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 				} else {
 					slog.Warn("Received /check command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID)
 				}
+			} else if strings.HasPrefix(text, "/list_snat") || strings.HasPrefix(text, "/enable_snat") || strings.HasPrefix(text, "/disable_snat") {
+				// Verify the sender is one of our configured recipients
+				authorized := false
+				for _, rcfg := range r.cfg.Telegram.Recipients {
+					if strconv.FormatInt(update.Message.Chat.ID, 10) == rcfg.ChatID {
+						authorized = true
+						break
+					}
+				}
+
+				if !authorized {
+					slog.Warn("Received iKuai command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID, "command", text)
+					continue
+				}
+
+				if r.cfg.Ikuai == nil || !r.cfg.Ikuai.Enabled {
+					_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "⚠️ iKuai integration is not enabled in config.")
+					continue
+				}
+
+				ikuai, err := adapter.NewIkuaiClient(r.cfg.Ikuai.URL, r.cfg.Ikuai.Username, r.cfg.Ikuai.Password)
+				if err != nil {
+					_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "❌ Failed to init iKuai client: "+err.Error())
+					continue
+				}
+
+				if err := ikuai.Login(); err != nil {
+					_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "❌ iKuai login failed: "+err.Error())
+					continue
+				}
+
+				if strings.HasPrefix(text, "/list_snat") {
+					rules, err := ikuai.GetSNATRules()
+					if err != nil {
+						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "❌ Failed to fetch SNAT rules: "+err.Error())
+						continue
+					}
+
+					var sb strings.Builder
+					sb.WriteString("📋 *iKuai SNAT Rules:*\n\n")
+					if len(rules) == 0 {
+						sb.WriteString("_No rules found._")
+					}
+					for _, rule := range rules {
+						status := "🔴 OFF"
+						if rule.Enabled == "yes" {
+							status = "🟢 ON"
+						}
+						comment := rule.Comment
+						if comment == "" {
+							comment = "(no comment)"
+						}
+						fmt.Fprintf(&sb, "`ID: %d` | %s\n💬 %s\n📍 %s -> %s\n\n", rule.ID, status, comment, rule.SrcAddr, rule.OutFace)
+					}
+					_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), sb.String())
+
+				} else {
+					parts := strings.Fields(text)
+					if len(parts) < 2 {
+						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "⚠️ Usage: /enable_snat <id> or /disable_snat <id>")
+						continue
+					}
+					id, err := strconv.Atoi(parts[1])
+					if err != nil {
+						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "❌ Invalid ID: "+parts[1])
+						continue
+					}
+
+					enable := strings.HasPrefix(text, "/enable_snat")
+					action := "disabling"
+					if enable {
+						action = "enabling"
+					}
+
+					if err := ikuai.ToggleSNATRule(id, enable); err != nil {
+						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), fmt.Sprintf("❌ Error %s rule %d: %v", action, id, err))
+					} else {
+						status := "disabled"
+						if enable {
+							status = "enabled"
+						}
+						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), fmt.Sprintf("✅ Rule %d has been %s.", id, status))
+					}
+				}
 			}
 		}
 

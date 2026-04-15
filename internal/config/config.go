@@ -80,6 +80,14 @@ type TelegramConfig struct {
 	Recipients     []TelegramRecipient `yaml:"recipients"`
 }
 
+// IkuaiConfig holds settings for an iKuai router.
+type IkuaiConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	URL      string `yaml:"url"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
 // CalendarConfig holds Google Calendar or Microsoft Outlook (Graph) settings.
 // Obtain OAuth refresh tokens via a one-time browser consent; keep this file private.
 type CalendarConfig struct {
@@ -108,6 +116,7 @@ type MonitorConfig struct {
 	RecheckIntervalSeconds int             `yaml:"recheck_interval_seconds"`
 	SMTP                   *SMTPConfig     `yaml:"smtp"`
 	Telegram               *TelegramConfig `yaml:"telegram"`
+	Ikuai                  *IkuaiConfig    `yaml:"ikuai"`
 	Calendar               *CalendarConfig `yaml:"calendar"`
 	LogDir                 string          `yaml:"log_dir"`
 	LogFile                string          `yaml:"log_file"`
@@ -155,6 +164,12 @@ type rawYAML struct {
 			Proxy  string `yaml:"proxy"`
 		} `yaml:"recipients"`
 	} `yaml:"telegram"`
+	Ikuai *struct {
+		Enabled  bool   `yaml:"enabled"`
+		URL      string `yaml:"url"`
+		Username string `yaml:"username"`
+		Password string `yaml:"password"`
+	} `yaml:"ikuai"`
 	Calendar *struct {
 		Enabled               bool   `yaml:"enabled"`
 		Provider              string `yaml:"provider"`
@@ -298,6 +313,15 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 			})
 		}
 		cfg.Telegram = tg
+	}
+
+	if raw.Ikuai != nil {
+		cfg.Ikuai = &IkuaiConfig{
+			Enabled:  raw.Ikuai.Enabled,
+			URL:      raw.Ikuai.URL,
+			Username: raw.Ikuai.Username,
+			Password: raw.Ikuai.Password,
+		}
 	}
 
 	if raw.Calendar != nil {

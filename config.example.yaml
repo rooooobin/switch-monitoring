@@ -67,6 +67,13 @@ telegram:
       chat_id: "987654321"
       proxy: "http://127.0.0.1:7890"
 
+# iKuai Router settings for SNAT rule management via Telegram
+ikuai:
+  enabled: false
+  url: "http://192.168.1.1"
+  username: "admin"
+  password: "your_password"
+
 # Logging
 log_dir: logs
 log_file: switch_monitor.log

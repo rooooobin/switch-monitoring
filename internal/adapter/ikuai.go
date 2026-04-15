@@ -14,10 +14,11 @@ import (
 
 // IkuaiClient handles communication with the iKuai router API.
 type IkuaiClient struct {
-	url      string
-	username string
-	password string
-	client   *http.Client
+	url          string
+	username     string
+	password     string
+	client       *http.Client
+	dnatFuncName string
 }
 
 // NewIkuaiClient creates a new iKuai API client.
@@ -79,19 +80,65 @@ func (c *IkuaiClient) Login() error {
 	return nil
 }
 
-// SNATRule represents a single SNAT rule in iKuai.
-type SNATRule struct {
-	ID      int    `json:"id"`
-	Enabled string `json:"enabled"` // "yes" or "no"
-	Comment string `json:"comment"`
-	SrcAddr string `json:"src_addr"`
-	OutFace string `json:"out_face"`
+// DNATRule represents a single DNAT rule in iKuai.
+// Using a map ensures we don't lose fields when sending it back for edits.
+type DNATRule map[string]interface{}
+
+func (r DNATRule) ID() int {
+	if id, ok := r["id"].(float64); ok {
+		return int(id)
+	}
+	return 0
 }
 
-// GetSNATRules fetches all SNAT rules.
-func (c *IkuaiClient) GetSNATRules() ([]SNATRule, error) {
+func (r DNATRule) Enabled() string {
+	if e, ok := r["enabled"].(string); ok {
+		return e
+	}
+	return "no"
+}
+
+func (r DNATRule) Comment() string {
+	if c, ok := r["comment"].(string); ok {
+		return c
+	}
+	return ""
+}
+
+func (r DNATRule) String(key string) string {
+	if v, ok := r[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// GetDNATRules fetches all DNAT rules.
+func (c *IkuaiClient) GetDNATRules() ([]DNATRule, error) {
+	names := []string{"dnat"}
+	if c.dnatFuncName != "" {
+		names = []string{c.dnatFuncName}
+	}
+
+	var lastErr error
+	for _, name := range names {
+		rules, err := c.getDNATRulesWithName(name)
+		if err == nil {
+			c.dnatFuncName = name
+			return rules, nil
+		}
+		lastErr = err
+		// If code is 30002 (Not found funcname), try the next name if we had more
+		if strings.Contains(err.Error(), "30002") {
+			continue
+		}
+		break
+	}
+	return nil, lastErr
+}
+
+func (c *IkuaiClient) getDNATRulesWithName(name string) ([]DNATRule, error) {
 	reqBody := map[string]interface{}{
-		"func_name": "snat",
+		"func_name": name,
 		"action":    "show",
 		"param": map[string]interface{}{
 			"TYPE": "data,total",
@@ -112,7 +159,7 @@ func (c *IkuaiClient) GetSNATRules() ([]SNATRule, error) {
 		Result int    `json:"result"`
 		ErrMsg string `json:"errMsg"`
 		Data   struct {
-			Data []SNATRule `json:"data"`
+			Data []DNATRule `json:"data"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -120,23 +167,23 @@ func (c *IkuaiClient) GetSNATRules() ([]SNATRule, error) {
 	}
 
 	if result.Result != 30000 {
-		return nil, fmt.Errorf("fetch snat failed: %s (code %d)", result.ErrMsg, result.Result)
+		return nil, fmt.Errorf("fetch %s failed: %s (code %d)", name, result.ErrMsg, result.Result)
 	}
 
 	return result.Data.Data, nil
 }
 
-// ToggleSNATRule enables or disables a specific SNAT rule.
-func (c *IkuaiClient) ToggleSNATRule(id int, enabled bool) error {
-	rules, err := c.GetSNATRules()
+// ToggleDNATRule enables or disables a specific DNAT rule.
+func (c *IkuaiClient) ToggleDNATRule(id int, enabled bool) error {
+	rules, err := c.GetDNATRules()
 	if err != nil {
 		return err
 	}
 
-	var target *SNATRule
-	for i := range rules {
-		if rules[i].ID == id {
-			target = &rules[i]
+	var target DNATRule
+	for _, r := range rules {
+		if r.ID() == id {
+			target = r
 			break
 		}
 	}
@@ -149,18 +196,13 @@ func (c *IkuaiClient) ToggleSNATRule(id int, enabled bool) error {
 	if enabled {
 		state = "yes"
 	}
+	target["enabled"] = state
 
-	// iKuai edit requires full rule parameters
+	// iKuai edit requires full rule parameters, which we preserved in the map
 	reqBody := map[string]interface{}{
-		"func_name": "snat",
+		"func_name": c.dnatFuncName,
 		"action":    "edit",
-		"param": map[string]interface{}{
-			"id":       target.ID,
-			"enabled":  state,
-			"comment":  target.Comment,
-			"src_addr": target.SrcAddr,
-			"out_face": target.OutFace,
-		},
+		"param":     target,
 	}
 	b, err := json.Marshal(reqBody)
 	if err != nil {
@@ -182,7 +224,7 @@ func (c *IkuaiClient) ToggleSNATRule(id int, enabled bool) error {
 	}
 
 	if result.Result != 30000 {
-		return fmt.Errorf("toggle snat failed: %s (code %d)", result.ErrMsg, result.Result)
+		return fmt.Errorf("toggle %s failed: %s (code %d)", c.dnatFuncName, result.ErrMsg, result.Result)
 	}
 
 	return nil

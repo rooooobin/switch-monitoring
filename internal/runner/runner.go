@@ -399,7 +399,7 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 				} else {
 					slog.Warn("Received /check command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID)
 				}
-			} else if strings.HasPrefix(text, "/list_snat") || strings.HasPrefix(text, "/enable_snat") || strings.HasPrefix(text, "/disable_snat") {
+			} else if strings.HasPrefix(text, "/list_dnat") || strings.HasPrefix(text, "/enable_dnat") || strings.HasPrefix(text, "/disable_dnat") {
 				// Verify the sender is one of our configured recipients
 				authorized := false
 				for _, rcfg := range r.cfg.Telegram.Recipients {
@@ -430,35 +430,42 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 					continue
 				}
 
-				if strings.HasPrefix(text, "/list_snat") {
-					rules, err := ikuai.GetSNATRules()
+				if strings.HasPrefix(text, "/list_dnat") {
+					rules, err := ikuai.GetDNATRules()
 					if err != nil {
-						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "❌ Failed to fetch SNAT rules: "+err.Error())
+						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "❌ Failed to fetch DNAT rules: "+err.Error())
 						continue
 					}
 
 					var sb strings.Builder
-					sb.WriteString("📋 *iKuai SNAT Rules:*\n\n")
+					sb.WriteString("📋 *iKuai DNAT Rules:*\n\n")
 					if len(rules) == 0 {
 						sb.WriteString("_No rules found._")
 					}
 					for _, rule := range rules {
 						status := "🔴 OFF"
-						if rule.Enabled == "yes" {
+						if rule.Enabled() == "yes" {
 							status = "🟢 ON"
 						}
-						comment := rule.Comment
+						comment := rule.Comment()
 						if comment == "" {
 							comment = "(no comment)"
 						}
-						fmt.Fprintf(&sb, "`ID: %d` | %s\n💬 %s\n📍 %s -> %s\n\n", rule.ID, status, comment, rule.SrcAddr, rule.OutFace)
+						wanPort := rule.String("wan_port")
+						lanAddr := rule.String("lan_addr")
+						lanPort := rule.String("lan_port")
+						proto := rule.String("protocol")
+						if proto == "" {
+							proto = "tcp/udp"
+						}
+						fmt.Fprintf(&sb, "`ID: %d` | %s\n💬 %s\n📍 %s:%s -> %s:%s\n\n", rule.ID(), status, comment, proto, wanPort, lanAddr, lanPort)
 					}
 					_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), sb.String())
 
 				} else {
 					parts := strings.Fields(text)
 					if len(parts) < 2 {
-						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "⚠️ Usage: /enable_snat <id> or /disable_snat <id>")
+						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "⚠️ Usage: /enable_dnat <id> or /disable_dnat <id>")
 						continue
 					}
 					id, err := strconv.Atoi(parts[1])
@@ -467,13 +474,13 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 						continue
 					}
 
-					enable := strings.HasPrefix(text, "/enable_snat")
+					enable := strings.HasPrefix(text, "/enable_dnat")
 					action := "disabling"
 					if enable {
 						action = "enabling"
 					}
 
-					if err := ikuai.ToggleSNATRule(id, enable); err != nil {
+					if err := ikuai.ToggleDNATRule(id, enable); err != nil {
 						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), fmt.Sprintf("❌ Error %s rule %d: %v", action, id, err))
 					} else {
 						status := "disabled"

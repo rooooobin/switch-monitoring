@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"strings"
 )
 
@@ -100,6 +101,9 @@ func (r DNATRule) Enabled() string {
 
 func (r DNATRule) Comment() string {
 	if c, ok := r["comment"].(string); ok {
+		if decoded, err := url.QueryUnescape(c); err == nil {
+			return decoded
+		}
 		return c
 	}
 	return ""

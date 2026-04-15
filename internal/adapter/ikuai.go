@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -56,6 +57,7 @@ func (c *IkuaiClient) Login() error {
 		return err
 	}
 
+	slog.Info("iKuai: Sending login request", "url", c.url)
 	resp, err := c.client.Post(c.url+"/Action/login", "application/json", bytes.NewReader(b))
 	if err != nil {
 		return err
@@ -78,6 +80,7 @@ func (c *IkuaiClient) Login() error {
 		return fmt.Errorf("login failed: %s (code %d)", result.ErrMsg, result.Result)
 	}
 
+	slog.Info("iKuai: Login successful")
 	return nil
 }
 
@@ -153,6 +156,7 @@ func (c *IkuaiClient) getDNATRulesWithName(name string) ([]DNATRule, error) {
 		return nil, err
 	}
 
+	slog.Info("iKuai: Fetching DNAT rules", "func_name", name)
 	resp, err := c.client.Post(c.url+"/Action/call", "application/json", bytes.NewReader(b))
 	if err != nil {
 		return nil, err
@@ -174,6 +178,7 @@ func (c *IkuaiClient) getDNATRulesWithName(name string) ([]DNATRule, error) {
 		return nil, fmt.Errorf("fetch %s failed: %s (code %d)", name, result.ErrMsg, result.Result)
 	}
 
+	slog.Info("iKuai: Successfully fetched DNAT rules", "count", len(result.Data.Data))
 	return result.Data.Data, nil
 }
 
@@ -213,6 +218,7 @@ func (c *IkuaiClient) ToggleDNATRule(id int, enabled bool) error {
 		return err
 	}
 
+	slog.Info("iKuai: Toggling DNAT rule", "id", id, "enabled", state, "func_name", c.dnatFuncName)
 	resp, err := c.client.Post(c.url+"/Action/call", "application/json", bytes.NewReader(b))
 	if err != nil {
 		return err
@@ -231,5 +237,6 @@ func (c *IkuaiClient) ToggleDNATRule(id int, enabled bool) error {
 		return fmt.Errorf("toggle %s failed: %s (code %d)", c.dnatFuncName, result.ErrMsg, result.Result)
 	}
 
+	slog.Info("iKuai: Successfully toggled DNAT rule", "id", id, "enabled", state)
 	return nil
 }

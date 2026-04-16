@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"html"
 	"net"
 	"net/smtp"
 	"strings"
@@ -96,34 +97,9 @@ func (s *AlertService) SendSummary(
 	}
 
 	if s.telegram != nil && s.telegram.Enabled && len(s.telegram.Recipients) > 0 {
-		var tgBody strings.Builder
-		if len(events) > 0 {
-			fmt.Fprintf(&tgBody, "Issues: %d\n\n", len(events))
-		}
-		tgBody.WriteString(strings.Join(alertParts, "\n\n"))
-		if len(events) > 0 {
-			tgBody.WriteString("\n\nIssue Details:\n")
-			for _, e := range events {
-				var reason string
-				if e.Reason == checker.ReasonDown {
-					reason = "DOWN"
-				} else if e.SpeedMbps != nil {
-					reason = fmt.Sprintf("LOW SPEED (%d Mbps)", *e.SpeedMbps)
-				} else {
-					reason = "LOW SPEED"
-				}
-				portLabel := fmt.Sprintf("port %d", e.PortID)
-				if aliases, ok := portAliasesBySwitch[e.SwitchName]; ok {
-					if alias, ok2 := aliases[e.PortID]; ok2 && alias != "" {
-						portLabel = fmt.Sprintf("port %d (%s)", e.PortID, alias)
-					}
-				}
-				fmt.Fprintf(&tgBody, "  - %s %s: %s\n", e.SwitchName, portLabel, reason)
-			}
-		}
-		tgMsg := fmt.Sprintf("%s\n\n%s", subject, tgBody.String())
+		tgHTML := buildTelegramSummaryHTML(subject, alertParts, events, portAliasesBySwitch)
 		for _, r := range s.telegram.Recipients {
-			if err := s.sendTelegramTo(tgMsg, r); err != nil {
+			if err := s.sendTelegramHTML(tgHTML, r); err != nil {
 				errs = append(errs, fmt.Sprintf("telegram(%s): %v", r.ChatID, err))
 			}
 		}
@@ -135,8 +111,75 @@ func (s *AlertService) SendSummary(
 	return nil
 }
 
-// sendTelegramTo sends a message via Telegram Bot API to a specific recipient.
-func (s *AlertService) sendTelegramTo(text string, r config.TelegramRecipient) error {
+// tgSwitchLinePrefix matches runner alertParts lines: "🔌 <switch-name>".
+const tgSwitchLinePrefix = "🔌 "
+
+// buildTelegramSummaryHTML formats the summary like DNAT: monospace <pre> tables so columns align in Telegram.
+func buildTelegramSummaryHTML(
+	subject string,
+	alertParts []string,
+	events []checker.AlertEvent,
+	portAliasesBySwitch map[string]map[int]string,
+) string {
+	var b strings.Builder
+	b.WriteString("<b>")
+	b.WriteString(html.EscapeString(subject))
+	b.WriteString("</b>")
+	if len(events) > 0 {
+		fmt.Fprintf(&b, "\n\n<b>Issues: %d</b>", len(events))
+	}
+	b.WriteString("\n\n")
+
+	for i, part := range alertParts {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		title, table, ok := strings.Cut(part, "\n")
+		if !ok {
+			b.WriteString(html.EscapeString(part))
+			continue
+		}
+		if strings.HasPrefix(title, tgSwitchLinePrefix) {
+			name := strings.TrimSpace(strings.TrimPrefix(title, tgSwitchLinePrefix))
+			b.WriteString(tgSwitchLinePrefix)
+			b.WriteString("<b>")
+			b.WriteString(html.EscapeString(name))
+			b.WriteString("</b>\n<pre>")
+			b.WriteString(html.EscapeString(table))
+			b.WriteString("</pre>")
+		} else {
+			b.WriteString(html.EscapeString(part))
+		}
+	}
+
+	if len(events) > 0 {
+		b.WriteString("\n\n<b>Issue Details:</b>\n<pre>")
+		var detail strings.Builder
+		for _, e := range events {
+			var reason string
+			if e.Reason == checker.ReasonDown {
+				reason = "DOWN"
+			} else if e.SpeedMbps != nil {
+				reason = fmt.Sprintf("LOW SPEED (%d Mbps)", *e.SpeedMbps)
+			} else {
+				reason = "LOW SPEED"
+			}
+			portLabel := fmt.Sprintf("port %d", e.PortID)
+			if aliases, ok := portAliasesBySwitch[e.SwitchName]; ok {
+				if alias, ok2 := aliases[e.PortID]; ok2 && alias != "" {
+					portLabel = fmt.Sprintf("port %d (%s)", e.PortID, alias)
+				}
+			}
+			fmt.Fprintf(&detail, "  - %s %s: %s\n", e.SwitchName, portLabel, reason)
+		}
+		b.WriteString(html.EscapeString(detail.String()))
+		b.WriteString("</pre>")
+	}
+
+	return b.String()
+}
+
+func (s *AlertService) sendTelegramHTML(htmlMsg string, r config.TelegramRecipient) error {
 	client, err := telegram.NewClient(r.Token, r.Proxy)
 	if err != nil {
 		return err
@@ -145,7 +188,7 @@ func (s *AlertService) sendTelegramTo(text string, r config.TelegramRecipient) e
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	return client.SendMessage(ctx, r.ChatID, text)
+	return client.SendMessageHTML(ctx, r.ChatID, htmlMsg)
 }
 
 // sendEmail connects to SMTP, sends one message to toAddr, and disconnects.

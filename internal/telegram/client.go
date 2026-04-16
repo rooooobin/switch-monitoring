@@ -41,11 +41,23 @@ func NewClient(token, proxy string) (*Client, error) {
 
 // SendMessage sends a text message to a specific chat ID.
 func (c *Client) SendMessage(ctx context.Context, chatID, text string) error {
+	return c.sendMessage(ctx, chatID, text, "")
+}
+
+// SendMessageHTML sends a message using Telegram HTML parse mode (<b>, <pre>, etc.).
+func (c *Client) SendMessageHTML(ctx context.Context, chatID, html string) error {
+	return c.sendMessage(ctx, chatID, html, "HTML")
+}
+
+func (c *Client) sendMessage(ctx context.Context, chatID, text, parseMode string) error {
 	urlStr := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", c.token)
 
 	payload := map[string]interface{}{
 		"chat_id": chatID,
 		"text":    text,
+	}
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
 	}
 
 	b, err := json.Marshal(payload)

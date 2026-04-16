@@ -4,6 +4,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -265,7 +266,7 @@ func (r *Runner) RunOnce(isManual bool) {
 		if len(rows) == 0 {
 			continue
 		}
-		swTable := FormatAlertTable(rows, false)
+		swTable := FormatStatusTable(rows, false)
 		alertParts = append(alertParts, fmt.Sprintf("🔌 %s\n%s", sw.Name, swTable))
 	}
 
@@ -437,30 +438,9 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 						continue
 					}
 
-					var sb strings.Builder
-					sb.WriteString("📋 *iKuai DNAT Rules:*\n\n")
-					if len(rules) == 0 {
-						sb.WriteString("_No rules found._")
-					}
-					for _, rule := range rules {
-						status := "🔴 OFF"
-						if rule.Enabled() == "yes" {
-							status = "🟢 ON"
-						}
-						comment := rule.Comment()
-						if comment == "" {
-							comment = "(no comment)"
-						}
-						wanPort := rule.String("wan_port")
-						lanAddr := rule.String("lan_addr")
-						lanPort := rule.String("lan_port")
-						proto := rule.String("protocol")
-						if proto == "" {
-							proto = "tcp/udp"
-						}
-						fmt.Fprintf(&sb, "`ID: %d` | %s\n💬 %s\n📍 %s:%s -> %s:%s\n\n", rule.ID(), status, comment, proto, wanPort, lanAddr, lanPort)
-					}
-					_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), sb.String())
+					table := FormatDNATRulesTable(rules)
+					msg := "📋 <b>iKuai DNAT Rules</b>\n<pre>" + html.EscapeString(table) + "</pre>"
+					_ = client.SendMessageHTML(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), msg)
 
 				} else {
 					parts := strings.Fields(text)

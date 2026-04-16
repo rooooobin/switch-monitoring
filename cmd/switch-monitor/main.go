@@ -11,12 +11,24 @@ import (
 	"switch-monitor/internal/runner"
 )
 
+// Set at link time, e.g. go build -ldflags "-X main.version=1.0.0 -X main.commit=abc123".
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func main() {
+	showVersion := flag.Bool("version", false, "print version and git commit, then exit")
 	cfgPath := flag.String("config", "config.yaml", "path to YAML config file")
 	once := flag.Bool("once", false, "run one check cycle and exit (useful for cron)")
 	noEmail := flag.Bool("no-email", false, "skip sending email alerts (useful for testing)")
 	noCalendar := flag.Bool("no-calendar", false, "skip calendar repair events (useful for testing)")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("switch-monitor %s\ncommit %s\n", version, commit)
+		os.Exit(0)
+	}
 
 	cfg, err := config.LoadConfig(*cfgPath)
 	if err != nil {

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"switch-monitor/internal/adapter"
 )
 
 const (
@@ -159,6 +161,30 @@ func padDisp(s string, width int) string {
 	return s + strings.Repeat(" ", width-dw)
 }
 
+// truncateDisp truncates s to at most max display columns, appending "..." if shortened.
+func truncateDisp(s string, maxW int) string {
+	if maxW < 4 {
+		maxW = 4
+	}
+	if dispWidth(s) <= maxW {
+		return s
+	}
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := 1
+		if isWide(r) {
+			rw = 2
+		}
+		if w+rw > maxW-3 {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String() + "..."
+}
+
 // ─── Table formatter ─────────────────────────────────────────────────────────
 
 // FormatStatusTable builds an ASCII table from a slice of rows.
@@ -170,16 +196,28 @@ func FormatStatusTable(rows []statusRow, includeSwitchColumn bool) string {
 
 	// Compute column widths in display columns (not bytes)
 	colPort := dispWidth("Port")
-	for _, r := range rows {
-		if w := dispWidth(portDisplay(r)); w > colPort {
-			colPort = w
-		}
-	}
 	colLink := dispWidth("Link")
 	colSpeed := dispWidth("Speed (Mbps)")
 	colTx := dispWidth(headerTx)
 	colRx := dispWidth(headerRx)
 	for _, r := range rows {
+		if w := dispWidth(portDisplay(r)); w > colPort {
+			colPort = w
+		}
+		linkStr := "down"
+		if r.linkUp {
+			linkStr = "up"
+		}
+		if w := dispWidth(linkStr); w > colLink {
+			colLink = w
+		}
+		speedStr := "-"
+		if r.speedMbps != nil {
+			speedStr = fmt.Sprintf("%d", *r.speedMbps)
+		}
+		if w := dispWidth(speedStr); w > colSpeed {
+			colSpeed = w
+		}
 		if w := dispWidth(txCell(r)); w > colTx {
 			colTx = w
 		}
@@ -231,6 +269,130 @@ func FormatStatusTable(rows []statusRow, includeSwitchColumn bool) string {
 	return sb.String()
 }
 
+// FormatDNATRulesTable renders iKuai DNAT rules as a bordered table (one rule per row).
+func FormatDNATRulesTable(rules []adapter.DNATRule) string {
+	if len(rules) == 0 {
+		return "(no rules)"
+	}
+
+	type dnatRow struct {
+		id, status, proto, wan, lan, comment string
+	}
+	rows := make([]dnatRow, 0, len(rules))
+	for _, rule := range rules {
+		st := "OFF"
+		if rule.Enabled() == "yes" {
+			st = "ON"
+		}
+		proto := rule.String("protocol")
+		if proto == "" {
+			proto = "tcp/udp"
+		}
+		wan := rule.String("wan_port")
+		if wan == "" {
+			wan = "-"
+		}
+		lanHost := rule.String("lan_addr")
+		lanPort := rule.String("lan_port")
+		var lan string
+		switch {
+		case lanHost != "" && lanPort != "":
+			lan = lanHost + ":" + lanPort
+		case lanHost != "":
+			lan = lanHost
+		case lanPort != "":
+			lan = ":" + lanPort
+		default:
+			lan = "-"
+		}
+		com := rule.Comment()
+		if com == "" {
+			com = "(no comment)"
+		}
+		com = truncateDisp(com, 56)
+		rows = append(rows, dnatRow{
+			id:      fmt.Sprintf("%d", rule.ID()),
+			status:  st,
+			proto:   proto,
+			wan:     wan,
+			lan:     lan,
+			comment: com,
+		})
+	}
+
+	colID := dispWidth("ID")
+	colStatus := dispWidth("Status")
+	colProto := dispWidth("Proto")
+	colWan := dispWidth("WAN")
+	colLan := dispWidth("LAN")
+	colComment := dispWidth("Comment")
+	for _, r := range rows {
+		if w := dispWidth(r.id); w > colID {
+			colID = w
+		}
+		if w := dispWidth(r.status); w > colStatus {
+			colStatus = w
+		}
+		if w := dispWidth(r.proto); w > colProto {
+			colProto = w
+		}
+		if w := dispWidth(r.wan); w > colWan {
+			colWan = w
+		}
+		if w := dispWidth(r.lan); w > colLan {
+			colLan = w
+		}
+		if w := dispWidth(r.comment); w > colComment {
+			colComment = w
+		}
+	}
+
+	sep := makeSepDNAT(colID, colStatus, colProto, colWan, colLan, colComment)
+
+	var sb strings.Builder
+	sb.WriteString(sep + "\n")
+	sb.WriteString(makeHeadDNAT(colID, colStatus, colProto, colWan, colLan, colComment) + "\n")
+	sb.WriteString(sep + "\n")
+
+	for _, r := range rows {
+		parts := []string{
+			" " + padDisp(r.id, colID) + " ",
+			" " + padDisp(r.status, colStatus) + " ",
+			" " + padDisp(r.proto, colProto) + " ",
+			" " + padDisp(r.wan, colWan) + " ",
+			" " + padDisp(r.lan, colLan) + " ",
+			" " + padDisp(r.comment, colComment) + " ",
+		}
+		sb.WriteString("|" + strings.Join(parts, "|") + "|\n")
+	}
+	sb.WriteString(sep)
+	return sb.String()
+}
+
+func makeSepDNAT(colID, colStatus, colProto, colWan, colLan, colComment int) string {
+	parts := []string{
+		strings.Repeat("-", colID+2),
+		strings.Repeat("-", colStatus+2),
+		strings.Repeat("-", colProto+2),
+		strings.Repeat("-", colWan+2),
+		strings.Repeat("-", colLan+2),
+		strings.Repeat("-", colComment+2),
+	}
+	return "+" + strings.Join(parts, "+") + "+"
+}
+
+func makeHeadDNAT(colID, colStatus, colProto, colWan, colLan, colComment int) string {
+	parts := []string{
+		" " + padDisp("ID", colID) + " ",
+		" " + padDisp("Status", colStatus) + " ",
+		" " + padDisp("Proto", colProto) + " ",
+		" " + padDisp("WAN", colWan) + " ",
+		" " + padDisp("LAN", colLan) + " ",
+		" " + padDisp("Comment", colComment) + " ",
+	}
+	return "|" + strings.Join(parts, "|") + "|"
+}
+
 func makeSep(inclSwitch bool, colSwitch, colPort, colLink, colSpeed, colTx, colRx int) string {
 	var parts []string
 	if inclSwitch {
@@ -259,128 +421,4 @@ func makeHead(inclSwitch bool, colSwitch, colPort, colLink, colSpeed, colTx, col
 		" "+padDisp(headerRx, colRx)+" ",
 	)
 	return "|" + strings.Join(parts, "|") + "|"
-}
-
-// FormatAlertTable builds a clean, aligned table for alert messages.
-// Columns: Port, Status, Speed, Tx, Rx - all properly aligned.
-func FormatAlertTable(rows []statusRow, includeSwitchColumn bool) string {
-	if len(rows) == 0 {
-		return "(no ports)"
-	}
-
-	// Calculate column widths
-	colPort := 4   // "Port"
-	colStatus := 6 // "Status"
-	colSpeed := 4  // "Mbps"
-	colTx := 2     // "Tx"
-	colRx := 2     // "Rx"
-
-	for _, r := range rows {
-		portStr := portDisplay(r)
-		if w := dispWidth(portStr); w > colPort {
-			colPort = w
-		}
-
-		statusStr := "UP"
-		if !r.linkUp {
-			statusStr = "DOWN"
-		}
-		if w := dispWidth(statusStr); w > colStatus {
-			colStatus = w
-		}
-
-		speedStr := "-"
-		if r.speedMbps != nil {
-			speedStr = fmt.Sprintf("%d", *r.speedMbps)
-		}
-		if w := dispWidth(speedStr); w > colSpeed {
-			colSpeed = w
-		}
-
-		txStr := txCell(r)
-		if w := dispWidth(txStr); w > colTx {
-			colTx = w
-		}
-
-		rxStr := rxCell(r)
-		if w := dispWidth(rxStr); w > colRx {
-			colRx = w
-		}
-	}
-
-	// Build table
-	var sb strings.Builder
-
-	// Header
-	if includeSwitchColumn {
-		fmt.Fprintf(&sb, "%-20s | %s | %s | %s | %s | %s\n",
-			padDisp("Switch", 20),
-			padDisp("Port", colPort),
-			padDisp("Status", colStatus),
-			padDisp("Mbps", colSpeed),
-			padDisp("Tx", colTx),
-			padDisp("Rx", colRx))
-	} else {
-		fmt.Fprintf(&sb, "%s | %s | %s | %s | %s\n",
-			padDisp("Port", colPort),
-			padDisp("Status", colStatus),
-			padDisp("Mbps", colSpeed),
-			padDisp("Tx", colTx),
-			padDisp("Rx", colRx))
-	}
-
-	// Separator
-	if includeSwitchColumn {
-		fmt.Fprintf(&sb, "%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
-			strings.Repeat("-", 20),
-			strings.Repeat("-", colPort),
-			strings.Repeat("-", colStatus),
-			strings.Repeat("-", colSpeed),
-			strings.Repeat("-", colTx),
-			strings.Repeat("-", colRx))
-	} else {
-		fmt.Fprintf(&sb, "%s-+-%s-+-%s-+-%s-+-%s\n",
-			strings.Repeat("-", colPort),
-			strings.Repeat("-", colStatus),
-			strings.Repeat("-", colSpeed),
-			strings.Repeat("-", colTx),
-			strings.Repeat("-", colRx))
-	}
-
-	// Data rows
-	for _, r := range rows {
-		portStr := portDisplay(r)
-
-		statusStr := "UP"
-		if !r.linkUp {
-			statusStr = "DOWN"
-		}
-
-		speedStr := "-"
-		if r.speedMbps != nil {
-			speedStr = fmt.Sprintf("%d", *r.speedMbps)
-		}
-
-		txStr := txCell(r)
-		rxStr := rxCell(r)
-
-		if includeSwitchColumn {
-			fmt.Fprintf(&sb, "%-20s | %s | %s | %s | %s | %s\n",
-				padDisp(r.switchName, 20),
-				padDisp(portStr, colPort),
-				padDisp(statusStr, colStatus),
-				padDisp(speedStr, colSpeed),
-				padDisp(txStr, colTx),
-				padDisp(rxStr, colRx))
-		} else {
-			fmt.Fprintf(&sb, "%s | %s | %s | %s | %s\n",
-				padDisp(portStr, colPort),
-				padDisp(statusStr, colStatus),
-				padDisp(speedStr, colSpeed),
-				padDisp(txStr, colTx),
-				padDisp(rxStr, colRx))
-		}
-	}
-
-	return strings.TrimRight(sb.String(), "\n")
 }

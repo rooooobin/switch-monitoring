@@ -17,6 +17,7 @@ Polls port link status and speed, prints a summary table, and sends alerts when 
 - SMTP email with port-465 SSL and port-587 STARTTLS support
 - Telegram Bot API notifications with optional HTTP proxy support
 - **Telegram Command Support** — Manually trigger checks by sending `/check` to your bot
+- **Mihomo (Clash Meta) Integration** — Switch proxies directly from Telegram using `/list_proxy` and `/set_proxy`
 - Aligned plain-text status table in console output and alert messages
 - **Hot config reload** — edits to `config.yaml` are picked up automatically between poll cycles; no restart needed
 - Structured log file (`slog`) + optional JSONL history per port check
@@ -30,11 +31,16 @@ Polls port link status and speed, prints a summary table, and sends alerts when 
 ### Build
 
 ```bash
+# Get the current version and git commit hash
+VERSION=$(git describe --tags --always --dirty) # Or parse from a tag
+COMMIT=$(git rev-parse --short HEAD)
+LDFLAGS="-X main.version=${VERSION} -X main.commit=${COMMIT}"
+
 # For the local machine (x86-64)
-go build -o switch-monitor ./cmd/switch-monitor/
+go build -ldflags="${LDFLAGS}" -o switch-monitor ./cmd/switch-monitor/
 
 # For NanoPi R2S or other ARM64 Linux (cross-compile from any machine)
-GOOS=linux GOARCH=arm64 go build -o switch-monitor-arm64 ./cmd/switch-monitor/
+GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o switch-monitor-arm64 ./cmd/switch-monitor/
 ```
 
 Go 1.22 or newer is required.
@@ -116,8 +122,24 @@ A single legacy `token` / `chat_id` / `proxy` directly under `telegram:` is stil
 If `telegram.listen_commands` is set to `true`, `switch-monitor` will listen for messages sent to the configured bot.
 You can send the following command to your bot to manually trigger actions:
 - `/check` - Forces an immediate poll cycle of all configured switches.
+- `/list_proxy` - Lists all available proxies in your configured Mihomo (Clash Meta) selector group.
+- `/set_proxy <name>` - Switches the Mihomo selector group to the specified proxy name.
 
 *Note: For security, the bot will only respond to commands sent from the exact `chat_id`s defined in your `telegram.recipients` configuration. If you are using a group chat ID, anyone in the group can trigger the command.*
+
+### Mihomo (Clash Meta)
+
+You can configure multiple Mihomo instances (or the same instance multiple times with different selectors) to change proxies across your entire network simultaneously.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `mihomo.enabled` | `false` | Enable Mihomo API integration |
+| `mihomo.instances[].name` | `mihomo` | Friendly name for the instance/group |
+| `mihomo.instances[].api_base` | `http://127.0.0.1:9090` | The external-controller URL |
+| `mihomo.instances[].secret` | — | The secret for the API, if configured |
+| `mihomo.instances[].selector` | `GLOBAL` | The name of the Proxy Group/Selector you want to control |
+
+*A legacy single-instance config under `mihomo` directly is also supported.*
 
 ### Logging
 

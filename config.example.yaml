@@ -74,6 +74,20 @@ ikuai:
   username: "admin"
   password: "your_password"
 
+# Local Mihomo (Clash Meta) external-controller — switch proxy via Telegram (/list_proxy, /set_proxy)
+mihomo:
+  enabled: false
+  # You can specify multiple mihomo instances. /set_proxy will apply the change to ALL instances.
+  instances:
+    - name: "Main Gateway"
+      api_base: "http://127.0.0.1:9090"
+      secret: ""
+      selector: "GLOBAL"
+    # - name: "Secondary Gateway"
+    #   api_base: "http://192.168.2.1:9090"
+    #   secret: "my_secret"
+    #   selector: "PROXY"
+
 # Logging
 log_dir: logs
 log_file: switch_monitor.log

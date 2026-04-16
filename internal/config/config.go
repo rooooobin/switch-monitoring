@@ -88,6 +88,20 @@ type IkuaiConfig struct {
 	Password string `yaml:"password"`
 }
 
+// MihomoInstance holds settings for a single Mihomo external-controller API.
+type MihomoInstance struct {
+	Name     string `yaml:"name"`
+	APIBase  string `yaml:"api_base"` // e.g. http://127.0.0.1:9090
+	Secret   string `yaml:"secret"`   // optional; matches mihomo secret
+	Selector string `yaml:"selector"` // proxy group name to switch via Telegram; empty = GLOBAL
+}
+
+// MihomoConfig holds settings for the local Mihomo (Clash Meta) external-controller API.
+type MihomoConfig struct {
+	Enabled   bool             `yaml:"enabled"`
+	Instances []MihomoInstance `yaml:"instances"`
+}
+
 // CalendarConfig holds Google Calendar or Microsoft Outlook (Graph) settings.
 // Obtain OAuth refresh tokens via a one-time browser consent; keep this file private.
 type CalendarConfig struct {
@@ -117,6 +131,7 @@ type MonitorConfig struct {
 	SMTP                   *SMTPConfig     `yaml:"smtp"`
 	Telegram               *TelegramConfig `yaml:"telegram"`
 	Ikuai                  *IkuaiConfig    `yaml:"ikuai"`
+	Mihomo                 *MihomoConfig   `yaml:"mihomo"`
 	Calendar               *CalendarConfig `yaml:"calendar"`
 	LogDir                 string          `yaml:"log_dir"`
 	LogFile                string          `yaml:"log_file"`
@@ -170,6 +185,19 @@ type rawYAML struct {
 		Username string `yaml:"username"`
 		Password string `yaml:"password"`
 	} `yaml:"ikuai"`
+	Mihomo *struct {
+		Enabled  bool   `yaml:"enabled"`
+		// legacy single config
+		APIBase  string `yaml:"api_base"`
+		Secret   string `yaml:"secret"`
+		Selector string `yaml:"selector"`
+		Instances []struct {
+			Name     string `yaml:"name"`
+			APIBase  string `yaml:"api_base"`
+			Secret   string `yaml:"secret"`
+			Selector string `yaml:"selector"`
+		} `yaml:"instances"`
+	} `yaml:"mihomo"`
 	Calendar *struct {
 		Enabled               bool   `yaml:"enabled"`
 		Provider              string `yaml:"provider"`
@@ -321,6 +349,35 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 			URL:      raw.Ikuai.URL,
 			Username: raw.Ikuai.Username,
 			Password: raw.Ikuai.Password,
+		}
+	}
+
+	if raw.Mihomo != nil {
+		cfg.Mihomo = &MihomoConfig{
+			Enabled: raw.Mihomo.Enabled,
+		}
+		for _, inst := range raw.Mihomo.Instances {
+			if strings.TrimSpace(inst.APIBase) != "" {
+				name := strings.TrimSpace(inst.Name)
+				if name == "" {
+					name = "mihomo"
+				}
+				cfg.Mihomo.Instances = append(cfg.Mihomo.Instances, MihomoInstance{
+					Name:     name,
+					APIBase:  strings.TrimSpace(inst.APIBase),
+					Secret:   strings.TrimSpace(inst.Secret),
+					Selector: strings.TrimSpace(inst.Selector),
+				})
+			}
+		}
+		// Fallback to legacy fields if instances list is empty
+		if len(cfg.Mihomo.Instances) == 0 && strings.TrimSpace(raw.Mihomo.APIBase) != "" {
+			cfg.Mihomo.Instances = append(cfg.Mihomo.Instances, MihomoInstance{
+				Name:     "default",
+				APIBase:  strings.TrimSpace(raw.Mihomo.APIBase),
+				Secret:   strings.TrimSpace(raw.Mihomo.Secret),
+				Selector: strings.TrimSpace(raw.Mihomo.Selector),
+			})
 		}
 	}
 

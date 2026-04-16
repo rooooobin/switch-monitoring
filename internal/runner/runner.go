@@ -338,6 +338,16 @@ func (r *Runner) RunLoop(once bool) {
 	}
 }
 
+func (r *Runner) isAuthorizedTelegramChat(chatID int64) bool {
+	id := strconv.FormatInt(chatID, 10)
+	for _, rcfg := range r.cfg.Telegram.Recipients {
+		if id == rcfg.ChatID {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runner) pollTelegramCommands(ctx context.Context) {
 	if r.cfg.Telegram == nil || !r.cfg.Telegram.Enabled || !r.cfg.Telegram.ListenCommands || len(r.cfg.Telegram.Recipients) == 0 {
 		return
@@ -377,80 +387,61 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 			}
 
 			text := strings.TrimSpace(update.Message.Text)
-			if strings.HasPrefix(text, "/check") {
-				// Verify the sender is one of our configured recipients
-				authorized := false
-				for _, rcfg := range r.cfg.Telegram.Recipients {
-					if strconv.FormatInt(update.Message.Chat.ID, 10) == rcfg.ChatID {
-						authorized = true
-						break
-					}
-				}
+			chatIDStr := strconv.FormatInt(update.Message.Chat.ID, 10)
 
-				if authorized {
-					slog.Info("Received /check command from authorized telegram chat", "chat_id", update.Message.Chat.ID)
-					// Trigger non-blocking
-					select {
-					case r.triggerChan <- struct{}{}:
-						// Send acknowledgement
-						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "🔄 Manual check triggered...")
-					default:
-						// Already a check pending
-					}
-				} else {
+			if strings.HasPrefix(text, "/check") {
+				if !r.isAuthorizedTelegramChat(update.Message.Chat.ID) {
 					slog.Warn("Received /check command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID)
+					continue
+				}
+				slog.Info("Received /check command from authorized telegram chat", "chat_id", update.Message.Chat.ID)
+				select {
+				case r.triggerChan <- struct{}{}:
+					_ = client.SendMessage(ctx, chatIDStr, "🔄 Manual check triggered...")
+				default:
 				}
 			} else if strings.HasPrefix(text, "/list_dnat") || strings.HasPrefix(text, "/enable_dnat") || strings.HasPrefix(text, "/disable_dnat") {
-				// Verify the sender is one of our configured recipients
-				authorized := false
-				for _, rcfg := range r.cfg.Telegram.Recipients {
-					if strconv.FormatInt(update.Message.Chat.ID, 10) == rcfg.ChatID {
-						authorized = true
-						break
-					}
-				}
-
-				if !authorized {
+				if !r.isAuthorizedTelegramChat(update.Message.Chat.ID) {
 					slog.Warn("Received iKuai command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID, "command", text)
 					continue
 				}
 
 				if r.cfg.Ikuai == nil || !r.cfg.Ikuai.Enabled {
-					_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "⚠️ iKuai integration is not enabled in config.")
+					_ = client.SendMessage(ctx, chatIDStr, "⚠️ iKuai integration is not enabled in config.")
 					continue
 				}
 
 				ikuai, err := adapter.NewIkuaiClient(r.cfg.Ikuai.URL, r.cfg.Ikuai.Username, r.cfg.Ikuai.Password)
 				if err != nil {
-					_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "❌ Failed to init iKuai client: "+err.Error())
+					_ = client.SendMessage(ctx, chatIDStr, "❌ Failed to init iKuai client: "+err.Error())
 					continue
 				}
 
 				if err := ikuai.Login(); err != nil {
-					_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "❌ iKuai login failed: "+err.Error())
+					_ = client.SendMessage(ctx, chatIDStr, "❌ iKuai login failed: "+err.Error())
 					continue
 				}
 
 				if strings.HasPrefix(text, "/list_dnat") {
 					rules, err := ikuai.GetDNATRules()
 					if err != nil {
-						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "❌ Failed to fetch DNAT rules: "+err.Error())
+						_ = client.SendMessage(ctx, chatIDStr, "❌ Failed to fetch DNAT rules: "+err.Error())
 						continue
 					}
 
 					table := FormatDNATRulesTable(rules)
 					msg := "📋 <b>iKuai DNAT Rules</b>\n<pre>" + html.EscapeString(table) + "</pre>"
-					_ = client.SendMessageHTML(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), msg)
+					_ = client.SendMessageHTML(ctx, chatIDStr, msg)
 
 				} else {
 					parts := strings.Fields(text)
 					if len(parts) < 2 {
-						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "⚠️ Usage: /enable_dnat <id> or /disable_dnat <id>")
+						_ = client.SendMessage(ctx, chatIDStr, "⚠️ Usage: /enable_dnat <id> or /disable_dnat <id>")
 						continue
 					}
 					id, err := strconv.Atoi(parts[1])
 					if err != nil {
-						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), "❌ Invalid ID: "+parts[1])
+						_ = client.SendMessage(ctx, chatIDStr, "❌ Invalid ID: "+parts[1])
 						continue
 					}
 
@@ -461,14 +452,81 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 					}
 
 					if err := ikuai.ToggleDNATRule(id, enable); err != nil {
-						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), fmt.Sprintf("❌ Error %s rule %d: %v", action, id, err))
+						slog.Error("Failed to toggle iKuai DNAT rule via Telegram", "chat_id", update.Message.Chat.ID, "rule_id", id, "enable", enable, "error", err)
+						_ = client.SendMessage(ctx, chatIDStr, fmt.Sprintf("❌ Error %s rule %d: %v", action, id, err))
 					} else {
 						status := "disabled"
 						if enable {
 							status = "enabled"
 						}
-						_ = client.SendMessage(ctx, strconv.FormatInt(update.Message.Chat.ID, 10), fmt.Sprintf("✅ Rule %d has been %s.", id, status))
+						slog.Info("Successfully toggled iKuai DNAT rule via Telegram", "chat_id", update.Message.Chat.ID, "rule_id", id, "status", status)
+						_ = client.SendMessage(ctx, chatIDStr, fmt.Sprintf("✅ Rule %d has been %s.", id, status))
 					}
+				}
+			} else if strings.HasPrefix(text, "/list_proxy") || strings.HasPrefix(text, "/set_proxy") {
+				if !r.isAuthorizedTelegramChat(update.Message.Chat.ID) {
+					slog.Warn("Received mihomo command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID, "command", text)
+					continue
+				}
+				if r.cfg.Mihomo == nil || !r.cfg.Mihomo.Enabled || len(r.cfg.Mihomo.Instances) == 0 {
+					_ = client.SendMessage(ctx, chatIDStr, "⚠️ Mihomo integration is not enabled in config.")
+					continue
+				}
+
+				if strings.HasPrefix(text, "/list_proxy") {
+					var allSb strings.Builder
+					for i, inst := range r.cfg.Mihomo.Instances {
+						sel := inst.Selector
+						if sel == "" {
+							sel = "GLOBAL"
+						}
+						m := adapter.NewMihomoClient(inst.APIBase, inst.Secret)
+						proxies, err := m.GetProxies(ctx)
+						if err != nil {
+							allSb.WriteString(fmt.Sprintf("❌ <b>%s</b>: %v\n\n", inst.Name, err))
+							continue
+						}
+						p, ok := proxies[sel]
+						if !ok {
+							allSb.WriteString(fmt.Sprintf("❌ <b>%s</b>: No proxy group %q\n\n", inst.Name, sel))
+							continue
+						}
+						if len(p.All) == 0 {
+							allSb.WriteString(fmt.Sprintf("⚠️ <b>%s</b>: Group %q is type %s and has no selectable outbounds\n\n", inst.Name, sel, p.Type))
+							continue
+						}
+						if i > 0 {
+							allSb.WriteString("\n")
+						}
+						allSb.WriteString(fmt.Sprintf("🔌 <b>%s</b>\n<pre>group: %s (%s)\ncurrent: %s\n\n", inst.Name, sel, p.Type, p.Now))
+						for _, name := range p.All {
+							allSb.WriteString(fmt.Sprintf("  %s\n", name))
+						}
+						allSb.WriteString("</pre>")
+					}
+					_ = client.SendMessageHTML(ctx, chatIDStr, allSb.String())
+				} else {
+					arg := strings.TrimSpace(strings.TrimPrefix(text, "/set_proxy"))
+					if arg == "" {
+						_ = client.SendMessage(ctx, chatIDStr, "⚠️ Usage: /set_proxy <outbound name> (use /list_proxy to see names)")
+						continue
+					}
+					var resultSb strings.Builder
+					for _, inst := range r.cfg.Mihomo.Instances {
+						sel := inst.Selector
+						if sel == "" {
+							sel = "GLOBAL"
+						}
+						m := adapter.NewMihomoClient(inst.APIBase, inst.Secret)
+						if err := m.SetSelector(ctx, sel, arg); err != nil {
+							slog.Error("Failed to switch Mihomo proxy via Telegram", "chat_id", update.Message.Chat.ID, "instance", inst.Name, "selector", sel, "target", arg, "error", err)
+							resultSb.WriteString(fmt.Sprintf("❌ <b>%s</b>: %v\n", inst.Name, err))
+						} else {
+							slog.Info("Successfully switched Mihomo proxy via Telegram", "chat_id", update.Message.Chat.ID, "instance", inst.Name, "selector", sel, "target", arg)
+							resultSb.WriteString(fmt.Sprintf("✅ <b>%s</b>: %s → %s\n", inst.Name, sel, arg))
+						}
+					}
+					_ = client.SendMessageHTML(ctx, chatIDStr, resultSb.String())
 				}
 			}
 		}

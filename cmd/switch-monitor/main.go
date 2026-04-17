@@ -2,10 +2,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 
+	"switch-monitor/internal/cli"
 	"switch-monitor/internal/config"
 	"switch-monitor/internal/logging"
 	"switch-monitor/internal/runner"
@@ -30,6 +32,15 @@ func main() {
 		os.Exit(0)
 	}
 
+	args := flag.Args()
+	if len(args) > 0 {
+		switch args[0] {
+		case "help", "-h", "--help":
+			cli.PrintSubcommandHelp(os.Stdout)
+			os.Exit(0)
+		}
+	}
+
 	cfg, err := config.LoadConfig(*cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -39,6 +50,28 @@ func main() {
 	if err := logging.Setup(cfg.LogDir, cfg.LogFile, cfg.LogLevel, true); err != nil {
 		fmt.Fprintf(os.Stderr, "logging setup: %v\n", err)
 		os.Exit(1)
+	}
+
+	if len(args) > 0 {
+		ctx := context.Background()
+		switch args[0] {
+		case "ikuai":
+			if err := cli.RunIkuai(ctx, cfg, args[1:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "mihomo":
+			if err := cli.RunMihomo(ctx, cfg, args[1:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		default:
+			fmt.Fprintf(os.Stderr, "unknown command %q\n\n", args[0])
+			cli.PrintSubcommandHelp(os.Stderr)
+			os.Exit(1)
+		}
 	}
 
 	r := runner.New(cfg, *cfgPath, *noEmail, *noCalendar)

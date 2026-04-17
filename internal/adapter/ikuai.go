@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // IkuaiClient handles communication with the iKuai router API.
@@ -42,6 +43,21 @@ func NewIkuaiClient(url, username, password string) (*IkuaiClient, error) {
 	}, nil
 }
 
+// postJSON sends a POST with JSON body to c.url+path and logs request/response timing.
+func (c *IkuaiClient) postJSON(path, op string, body []byte) (*http.Response, error) {
+	urlStr := c.url + path
+	start := time.Now()
+	slog.Info("iKuai HTTP request", "op", op, "method", http.MethodPost, "url", urlStr, "body_bytes", len(body))
+	resp, err := c.client.Post(urlStr, "application/json", bytes.NewReader(body))
+	dur := time.Since(start)
+	if err != nil {
+		slog.Error("iKuai HTTP transport error", "op", op, "url", urlStr, "duration_ms", dur.Milliseconds(), "err", err)
+		return nil, err
+	}
+	slog.Info("iKuai HTTP response", "op", op, "url", urlStr, "status", resp.StatusCode, "duration_ms", dur.Milliseconds())
+	return resp, nil
+}
+
 // Login authenticates with the iKuai router.
 func (c *IkuaiClient) Login() error {
 	hash := md5.Sum([]byte(c.password))
@@ -57,14 +73,14 @@ func (c *IkuaiClient) Login() error {
 		return err
 	}
 
-	slog.Info("iKuai: Sending login request", "url", c.url)
-	resp, err := c.client.Post(c.url+"/Action/login", "application/json", bytes.NewReader(b))
+	resp, err := c.postJSON("/Action/login", "login", b)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		slog.Warn("iKuai login HTTP non-OK", "status", resp.StatusCode)
 		return fmt.Errorf("login failed with status: %s", resp.Status)
 	}
 
@@ -73,14 +89,16 @@ func (c *IkuaiClient) Login() error {
 		ErrMsg string `json:"errMsg"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		slog.Error("iKuai login JSON decode failed", "err", err)
 		return err
 	}
 
 	if result.Result != 10000 {
+		slog.Warn("iKuai login rejected by API", "result", result.Result, "err_msg", result.ErrMsg)
 		return fmt.Errorf("login failed: %s (code %d)", result.ErrMsg, result.Result)
 	}
 
-	slog.Info("iKuai: Login successful")
+	slog.Info("iKuai login OK", "result", result.Result)
 	return nil
 }
 
@@ -156,8 +174,7 @@ func (c *IkuaiClient) getDNATRulesWithName(name string) ([]DNATRule, error) {
 		return nil, err
 	}
 
-	slog.Info("iKuai: Fetching DNAT rules", "func_name", name)
-	resp, err := c.client.Post(c.url+"/Action/call", "application/json", bytes.NewReader(b))
+	resp, err := c.postJSON("/Action/call", "dnat_show", b)
 	if err != nil {
 		return nil, err
 	}
@@ -171,14 +188,16 @@ func (c *IkuaiClient) getDNATRulesWithName(name string) ([]DNATRule, error) {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		slog.Error("iKuai DNAT list JSON decode failed", "func_name", name, "err", err)
 		return nil, err
 	}
 
 	if result.Result != 30000 {
+		slog.Warn("iKuai DNAT list API error", "func_name", name, "result", result.Result, "err_msg", result.ErrMsg)
 		return nil, fmt.Errorf("fetch %s failed: %s (code %d)", name, result.ErrMsg, result.Result)
 	}
 
-	slog.Info("iKuai: Successfully fetched DNAT rules", "count", len(result.Data.Data))
+	slog.Info("iKuai DNAT rules loaded", "func_name", name, "count", len(result.Data.Data))
 	return result.Data.Data, nil
 }
 
@@ -218,8 +237,8 @@ func (c *IkuaiClient) ToggleDNATRule(id int, enabled bool) error {
 		return err
 	}
 
-	slog.Info("iKuai: Toggling DNAT rule", "id", id, "enabled", state, "func_name", c.dnatFuncName)
-	resp, err := c.client.Post(c.url+"/Action/call", "application/json", bytes.NewReader(b))
+	slog.Info("iKuai DNAT toggle request", "rule_id", id, "enabled", state, "func_name", c.dnatFuncName)
+	resp, err := c.postJSON("/Action/call", "dnat_edit", b)
 	if err != nil {
 		return err
 	}
@@ -230,13 +249,15 @@ func (c *IkuaiClient) ToggleDNATRule(id int, enabled bool) error {
 		ErrMsg string `json:"errMsg"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		slog.Error("iKuai DNAT toggle JSON decode failed", "rule_id", id, "err", err)
 		return err
 	}
 
 	if result.Result != 30000 {
+		slog.Warn("iKuai DNAT toggle API error", "rule_id", id, "result", result.Result, "err_msg", result.ErrMsg, "func_name", c.dnatFuncName)
 		return fmt.Errorf("toggle %s failed: %s (code %d)", c.dnatFuncName, result.ErrMsg, result.Result)
 	}
 
-	slog.Info("iKuai: Successfully toggled DNAT rule", "id", id, "enabled", state)
+	slog.Info("iKuai DNAT toggle OK", "rule_id", id, "enabled", state, "func_name", c.dnatFuncName)
 	return nil
 }

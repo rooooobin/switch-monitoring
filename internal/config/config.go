@@ -100,6 +100,26 @@ type MihomoInstance struct {
 type MihomoConfig struct {
 	Enabled   bool             `yaml:"enabled"`
 	Instances []MihomoInstance `yaml:"instances"`
+	// LatencyTestURL is passed to GET /proxies/{name}/delay as the test URL (default: gstatic 204).
+	LatencyTestURL string `yaml:"latency_test_url"`
+	// LatencyTimeoutMS is the delay-test timeout in milliseconds sent to Mihomo (default: 5000).
+	LatencyTimeoutMS int `yaml:"latency_timeout_ms"`
+}
+
+// LatencyTestURLOrDefault returns the configured latency probe URL or the standard default.
+func (m *MihomoConfig) LatencyTestURLOrDefault() string {
+	if m == nil || strings.TrimSpace(m.LatencyTestURL) == "" {
+		return "http://www.gstatic.com/generate_204"
+	}
+	return strings.TrimSpace(m.LatencyTestURL)
+}
+
+// LatencyTimeoutMSOrDefault returns the configured delay-test timeout or 5000 ms.
+func (m *MihomoConfig) LatencyTimeoutMSOrDefault() int {
+	if m == nil || m.LatencyTimeoutMS <= 0 {
+		return 5000
+	}
+	return m.LatencyTimeoutMS
 }
 
 // CalendarConfig holds Google Calendar or Microsoft Outlook (Graph) settings.
@@ -186,7 +206,9 @@ type rawYAML struct {
 		Password string `yaml:"password"`
 	} `yaml:"ikuai"`
 	Mihomo *struct {
-		Enabled  bool   `yaml:"enabled"`
+		Enabled   bool   `yaml:"enabled"`
+		LatencyTestURL   string `yaml:"latency_test_url"`
+		LatencyTimeoutMS int    `yaml:"latency_timeout_ms"`
 		// legacy single config
 		APIBase  string `yaml:"api_base"`
 		Secret   string `yaml:"secret"`
@@ -354,7 +376,9 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 
 	if raw.Mihomo != nil {
 		cfg.Mihomo = &MihomoConfig{
-			Enabled: raw.Mihomo.Enabled,
+			Enabled:          raw.Mihomo.Enabled,
+			LatencyTestURL:   strings.TrimSpace(raw.Mihomo.LatencyTestURL),
+			LatencyTimeoutMS: raw.Mihomo.LatencyTimeoutMS,
 		}
 		for _, inst := range raw.Mihomo.Instances {
 			if strings.TrimSpace(inst.APIBase) != "" {

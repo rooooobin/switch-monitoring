@@ -463,7 +463,7 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 						_ = client.SendMessage(ctx, chatIDStr, fmt.Sprintf("✅ Rule %d has been %s.", id, status))
 					}
 				}
-			} else if strings.HasPrefix(text, "/list_proxy") || strings.HasPrefix(text, "/set_proxy") {
+			} else if strings.HasPrefix(text, "/list_proxy") || strings.HasPrefix(text, "/set_proxy") || strings.HasPrefix(text, "/delay_proxy") {
 				if !r.isAuthorizedTelegramChat(update.Message.Chat.ID) {
 					slog.Warn("Received mihomo command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID, "command", text)
 					continue
@@ -473,7 +473,33 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 					continue
 				}
 
-				if strings.HasPrefix(text, "/list_proxy") {
+				if strings.HasPrefix(text, "/delay_proxy") {
+					arg := strings.TrimSpace(strings.TrimPrefix(text, "/delay_proxy"))
+					if arg == "" {
+						_ = client.SendMessage(ctx, chatIDStr, "⚠️ Usage: /delay_proxy <proxy name>")
+						continue
+					}
+					testURL := r.cfg.Mihomo.LatencyTestURLOrDefault()
+					timeoutMS := r.cfg.Mihomo.LatencyTimeoutMSOrDefault()
+					var resultSb strings.Builder
+					for _, inst := range r.cfg.Mihomo.Instances {
+						m := adapter.NewMihomoClient(inst.APIBase, inst.Secret)
+						delay, err := m.GetProxyDelay(ctx, arg, testURL, timeoutMS)
+						if err != nil {
+							slog.Error("Mihomo delay test failed via Telegram", "chat_id", update.Message.Chat.ID, "instance", inst.Name, "proxy", arg, "error", err)
+							resultSb.WriteString(fmt.Sprintf("❌ <b>%s</b>: %s\n", html.EscapeString(inst.Name), html.EscapeString(err.Error())))
+							continue
+						}
+						if delay <= 0 {
+							resultSb.WriteString(fmt.Sprintf("⚠️ <b>%s</b>: <code>%s</code> — unreachable or failed (0 ms)\n", html.EscapeString(inst.Name), html.EscapeString(arg)))
+						} else {
+							slog.Info("Mihomo delay OK via Telegram", "chat_id", update.Message.Chat.ID, "instance", inst.Name, "proxy", arg, "delay_ms", delay)
+							resultSb.WriteString(fmt.Sprintf("✅ <b>%s</b>: <code>%s</code> → <b>%d ms</b>\n", html.EscapeString(inst.Name), html.EscapeString(arg), delay))
+						}
+					}
+					header := fmt.Sprintf("⏱ <b>Proxy delay</b>\n<code>%s</code>\n<i>timeout %d ms</i>\n\n", html.EscapeString(arg), timeoutMS)
+					_ = client.SendMessageHTML(ctx, chatIDStr, header+resultSb.String())
+				} else if strings.HasPrefix(text, "/list_proxy") {
 					var allSb strings.Builder
 					for i, inst := range r.cfg.Mihomo.Instances {
 						sel := inst.Selector
@@ -505,7 +531,7 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 						allSb.WriteString("</pre>")
 					}
 					_ = client.SendMessageHTML(ctx, chatIDStr, allSb.String())
-				} else {
+				} else if strings.HasPrefix(text, "/set_proxy") {
 					arg := strings.TrimSpace(strings.TrimPrefix(text, "/set_proxy"))
 					if arg == "" {
 						_ = client.SendMessage(ctx, chatIDStr, "⚠️ Usage: /set_proxy <outbound name> (use /list_proxy to see names)")

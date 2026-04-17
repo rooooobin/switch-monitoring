@@ -74,9 +74,13 @@ ikuai:
   username: "admin"
   password: "your_password"
 
-# Local Mihomo (Clash Meta) external-controller — switch proxy via Telegram (/list_proxy, /set_proxy)
+# Local Mihomo (Clash Meta) external-controller — Telegram: /list_proxy, /set_proxy, /delay_proxy
+# CLI: mihomo list-proxy | set-proxy | delay-proxy
 mihomo:
   enabled: false
+  # Optional: probe URL and API timeout (ms) for GET /proxies/{name}/delay (used by /delay_proxy and delay-proxy)
+  # latency_test_url: "http://www.gstatic.com/generate_204"
+  # latency_timeout_ms: 5000
   # You can specify multiple mihomo instances. /set_proxy will apply the change to ALL instances.
   instances:
     - name: "Main Gateway"

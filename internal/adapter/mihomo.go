@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -117,6 +118,80 @@ func (c *MihomoClient) SetSelector(ctx context.Context, groupName, outboundName 
 	}
 	slog.Info("Mihomo selector updated", "group", groupName, "outbound", outboundName)
 	return nil
+}
+
+type delayResponse struct {
+	Delay int `json:"delay"`
+}
+
+// GetProxyDelay runs Mihomo's latency test for a single outbound (GET /proxies/{name}/delay).
+// testURL is the probe URL (e.g. http://www.gstatic.com/generate_204); timeoutMs is the API timeout in milliseconds.
+func (c *MihomoClient) GetProxyDelay(ctx context.Context, proxyName, testURL string, timeoutMs int) (int, error) {
+	if strings.TrimSpace(proxyName) == "" {
+		return 0, fmt.Errorf("proxy name is empty")
+	}
+	if testURL == "" {
+		testURL = "http://www.gstatic.com/generate_204"
+	}
+	if timeoutMs <= 0 {
+		timeoutMs = 5000
+	}
+
+	u, err := url.Parse(c.base + "/proxies/" + url.PathEscape(proxyName) + "/delay")
+	if err != nil {
+		return 0, err
+	}
+	q := u.Query()
+	q.Set("url", testURL)
+	q.Set("timeout", strconv.Itoa(timeoutMs))
+	u.RawQuery = q.Encode()
+
+	// Allow enough time for Mihomo to finish the probe (its timeout) plus HTTP overhead.
+	deadlineMs := timeoutMs + 25000
+	if deadlineMs < 35000 {
+		deadlineMs = 35000
+	}
+	if deadlineMs > 120000 {
+		deadlineMs = 120000
+	}
+	ctx2, cancel := context.WithTimeout(ctx, time.Duration(deadlineMs)*time.Millisecond)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx2, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return 0, err
+	}
+	c.setAuth(req)
+
+	delayClient := *c.client
+	delayClient.Timeout = time.Duration(deadlineMs) * time.Millisecond
+
+	start := time.Now()
+	slog.Info("Mihomo HTTP request", "op", "get_proxy_delay", "method", http.MethodGet, "url", u.String(), "proxy", proxyName, "timeout_ms", timeoutMs)
+	resp, err := delayClient.Do(req)
+	dur := time.Since(start)
+	if err != nil {
+		slog.Error("Mihomo HTTP transport error", "op", "get_proxy_delay", "proxy", proxyName, "duration_ms", dur.Milliseconds(), "err", err)
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	slog.Info("Mihomo HTTP response", "op", "get_proxy_delay", "proxy", proxyName, "status", resp.StatusCode, "duration_ms", dur.Milliseconds())
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Warn("Mihomo get_proxy_delay non-OK", "proxy", proxyName, "status", resp.StatusCode, "body_snip", truncateForLog(body, 200))
+		return 0, fmt.Errorf("GET delay: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var out delayResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		slog.Error("Mihomo get_proxy_delay decode failed", "proxy", proxyName, "err", err)
+		return 0, fmt.Errorf("decode delay: %w", err)
+	}
+	slog.Info("Mihomo proxy delay", "proxy", proxyName, "delay_ms", out.Delay)
+	return out.Delay, nil
 }
 
 func truncateForLog(b []byte, max int) string {

@@ -24,8 +24,10 @@ func PrintSubcommandHelp(w io.Writer) {
 
   switch-monitor mihomo list-proxy
   switch-monitor mihomo set-proxy <outbound-name>
+  switch-monitor mihomo delay-proxy <proxy-name>
 
 Requires ikuai / mihomo sections enabled in the config file (same as Telegram).
+Mihomo delay uses latency_test_url and latency_timeout_ms from config when set.
 `)
 }
 
@@ -100,7 +102,7 @@ func RunMihomo(ctx context.Context, cfg *config.MonitorConfig, args []string) er
 	}
 	if len(args) < 1 {
 		slog.Error("CLI mihomo: missing subcommand")
-		return fmt.Errorf("mihomo: expected subcommand (list-proxy, set-proxy)")
+		return fmt.Errorf("mihomo: expected subcommand (list-proxy, set-proxy, delay-proxy)")
 	}
 	slog.Info("CLI mihomo command", "subcommand", args[0], "args", args[1:], "instance_count", len(cfg.Mihomo.Instances))
 
@@ -172,6 +174,39 @@ func RunMihomo(ctx context.Context, cfg *config.MonitorConfig, args []string) er
 			}
 		}
 		slog.Info("CLI mihomo: set-proxy done", "outbound", arg)
+		return nil
+
+	case "delay-proxy":
+		if len(args) < 2 {
+			slog.Error("CLI mihomo delay-proxy: missing proxy name")
+			return fmt.Errorf("delay-proxy: missing proxy name (use: mihomo delay-proxy <name>)")
+		}
+		name := strings.TrimSpace(strings.Join(args[1:], " "))
+		if name == "" {
+			slog.Error("CLI mihomo delay-proxy: empty proxy name")
+			return fmt.Errorf("delay-proxy: proxy name is empty")
+		}
+		testURL := cfg.Mihomo.LatencyTestURLOrDefault()
+		timeoutMS := cfg.Mihomo.LatencyTimeoutMSOrDefault()
+		slog.Info("CLI mihomo delay-proxy", "proxy", name, "test_url", testURL, "timeout_ms", timeoutMS)
+		for _, inst := range cfg.Mihomo.Instances {
+			m := adapter.NewMihomoClient(inst.APIBase, inst.Secret)
+			slog.Info("CLI mihomo delay-proxy instance", "instance", inst.Name, "api_base", inst.APIBase)
+			delay, err := m.GetProxyDelay(ctx, name, testURL, timeoutMS)
+			if err != nil {
+				slog.Error("CLI mihomo delay-proxy failed", "instance", inst.Name, "proxy", name, "err", err)
+				fmt.Printf("%s: error: %v\n", inst.Name, err)
+				continue
+			}
+			if delay <= 0 {
+				fmt.Printf("%s: %s — unreachable or failed (0 ms)\n", inst.Name, name)
+				slog.Warn("CLI mihomo delay-proxy zero", "instance", inst.Name, "proxy", name)
+			} else {
+				fmt.Printf("%s: %s → %d ms\n", inst.Name, name, delay)
+				slog.Info("CLI mihomo delay-proxy OK", "instance", inst.Name, "proxy", name, "delay_ms", delay)
+			}
+		}
+		slog.Info("CLI mihomo: delay-proxy done", "proxy", name)
 		return nil
 
 	default:

@@ -67,6 +67,12 @@ func main() {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "xiaodu":
+			if err := cli.RunXiaodu(ctx, cfg, args[1:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		default:
 			fmt.Fprintf(os.Stderr, "unknown command %q\n\n", args[0])
 			cli.PrintSubcommandHelp(os.Stderr)

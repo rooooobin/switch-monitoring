@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
@@ -58,6 +59,121 @@ func (c *IkuaiClient) postJSON(path, op string, body []byte) (*http.Response, er
 	return resp, nil
 }
 
+type ikuaiEnvelope struct {
+	Result  int             `json:"result"`
+	Code    int             `json:"code"`
+	ErrMsg  string          `json:"errMsg"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
+	Results json.RawMessage `json:"results"`
+}
+
+func decodeIkuaiEnvelope(body io.Reader) (ikuaiEnvelope, map[string]json.RawMessage, error) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return ikuaiEnvelope{}, nil, err
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ikuaiEnvelope{}, nil, err
+	}
+
+	var env ikuaiEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return ikuaiEnvelope{}, nil, err
+	}
+
+	// v4 uses capitalized Result while v3 often uses lowercase result.
+	if env.Result == 0 {
+		var alt struct {
+			Result int `json:"Result"`
+		}
+		if err := json.Unmarshal(raw, &alt); err == nil && alt.Result != 0 {
+			env.Result = alt.Result
+		}
+	}
+	if env.ErrMsg == "" {
+		var alt struct {
+			ErrMsg string `json:"ErrMsg"`
+		}
+		if err := json.Unmarshal(raw, &alt); err == nil {
+			env.ErrMsg = alt.ErrMsg
+		}
+	}
+	return env, fields, nil
+}
+
+func hasField(fields map[string]json.RawMessage, key string) bool {
+	_, ok := fields[key]
+	return ok
+}
+
+func loginSuccess(env ikuaiEnvelope, fields map[string]json.RawMessage) bool {
+	if env.Result == 10000 {
+		return true
+	}
+	return hasField(fields, "code") && env.Code == 0
+}
+
+func loginErrorMessage(env ikuaiEnvelope) string {
+	if env.Message != "" {
+		return env.Message
+	}
+	return env.ErrMsg
+}
+
+func callSuccess(env ikuaiEnvelope, fields map[string]json.RawMessage) bool {
+	if env.Result == 30000 {
+		return true
+	}
+	return hasField(fields, "code") && env.Code == 0
+}
+
+func callErrorMessage(env ikuaiEnvelope) string {
+	if env.Message != "" {
+		return env.Message
+	}
+	return env.ErrMsg
+}
+
+func callFuncNotFound(env ikuaiEnvelope, fields map[string]json.RawMessage) bool {
+	if env.Result == 30002 {
+		return true
+	}
+	if !hasField(fields, "code") || env.Code == 0 {
+		return false
+	}
+	msg := strings.ToLower(callErrorMessage(env))
+	return strings.Contains(msg, "not found")
+}
+
+func decodeCallDataList(raw json.RawMessage) ([]DNATRule, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var direct []DNATRule
+	if err := json.Unmarshal(raw, &direct); err == nil {
+		return direct, nil
+	}
+
+	var wrapped struct {
+		Data []DNATRule `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, err
+	}
+	return wrapped.Data, nil
+}
+
+func callDataList(env ikuaiEnvelope) ([]DNATRule, error) {
+	if len(env.Results) > 0 {
+		return decodeCallDataList(env.Results)
+	}
+	return decodeCallDataList(env.Data)
+}
+
 // Login authenticates with the iKuai router.
 func (c *IkuaiClient) Login() error {
 	hash := md5.Sum([]byte(c.password))
@@ -84,21 +200,18 @@ func (c *IkuaiClient) Login() error {
 		return fmt.Errorf("login failed with status: %s", resp.Status)
 	}
 
-	var result struct {
-		Result int    `json:"result"`
-		ErrMsg string `json:"errMsg"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	env, fields, err := decodeIkuaiEnvelope(resp.Body)
+	if err != nil {
 		slog.Error("iKuai login JSON decode failed", "err", err)
 		return err
 	}
 
-	if result.Result != 10000 {
-		slog.Warn("iKuai login rejected by API", "result", result.Result, "err_msg", result.ErrMsg)
-		return fmt.Errorf("login failed: %s (code %d)", result.ErrMsg, result.Result)
+	if !loginSuccess(env, fields) {
+		slog.Warn("iKuai login rejected by API", "result", env.Result, "code", env.Code, "err_msg", loginErrorMessage(env))
+		return fmt.Errorf("login failed: %s (result %d code %d)", loginErrorMessage(env), env.Result, env.Code)
 	}
 
-	slog.Info("iKuai login OK", "result", result.Result)
+	slog.Info("iKuai login OK", "result", env.Result, "code", env.Code)
 	return nil
 }
 
@@ -152,13 +265,20 @@ func (c *IkuaiClient) GetDNATRules() ([]DNATRule, error) {
 			return rules, nil
 		}
 		lastErr = err
-		// If code is 30002 (Not found funcname), try the next name if we had more
-		if strings.Contains(err.Error(), "30002") {
+		if callFuncNotFoundFromError(err) {
 			continue
 		}
 		break
 	}
 	return nil, lastErr
+}
+
+func callFuncNotFoundFromError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "30002") || strings.Contains(strings.ToLower(msg), "not found")
 }
 
 func (c *IkuaiClient) getDNATRulesWithName(name string) ([]DNATRule, error) {
@@ -180,25 +300,32 @@ func (c *IkuaiClient) getDNATRulesWithName(name string) ([]DNATRule, error) {
 	}
 	defer resp.Body.Close()
 
-	var result struct {
-		Result int    `json:"result"`
-		ErrMsg string `json:"errMsg"`
-		Data   struct {
-			Data []DNATRule `json:"data"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	env, fields, err := decodeIkuaiEnvelope(resp.Body)
+	if err != nil {
 		slog.Error("iKuai DNAT list JSON decode failed", "func_name", name, "err", err)
 		return nil, err
 	}
 
-	if result.Result != 30000 {
-		slog.Warn("iKuai DNAT list API error", "func_name", name, "result", result.Result, "err_msg", result.ErrMsg)
-		return nil, fmt.Errorf("fetch %s failed: %s (code %d)", name, result.ErrMsg, result.Result)
+	if !callSuccess(env, fields) {
+		slog.Warn("iKuai DNAT list API error", "func_name", name, "result", env.Result, "code", env.Code, "err_msg", callErrorMessage(env))
+		return nil, fmt.Errorf("fetch %s failed: %s (code %d)", name, callErrorMessage(env), callErrorCode(env))
 	}
 
-	slog.Info("iKuai DNAT rules loaded", "func_name", name, "count", len(result.Data.Data))
-	return result.Data.Data, nil
+	rules, err := callDataList(env)
+	if err != nil {
+		slog.Error("iKuai DNAT list data decode failed", "func_name", name, "err", err)
+		return nil, err
+	}
+
+	slog.Info("iKuai DNAT rules loaded", "func_name", name, "count", len(rules))
+	return rules, nil
+}
+
+func callErrorCode(env ikuaiEnvelope) int {
+	if env.Code != 0 {
+		return env.Code
+	}
+	return env.Result
 }
 
 // ToggleDNATRule enables or disables a specific DNAT rule.
@@ -244,18 +371,15 @@ func (c *IkuaiClient) ToggleDNATRule(id int, enabled bool) error {
 	}
 	defer resp.Body.Close()
 
-	var result struct {
-		Result int    `json:"result"`
-		ErrMsg string `json:"errMsg"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	env, fields, err := decodeIkuaiEnvelope(resp.Body)
+	if err != nil {
 		slog.Error("iKuai DNAT toggle JSON decode failed", "rule_id", id, "err", err)
 		return err
 	}
 
-	if result.Result != 30000 {
-		slog.Warn("iKuai DNAT toggle API error", "rule_id", id, "result", result.Result, "err_msg", result.ErrMsg, "func_name", c.dnatFuncName)
-		return fmt.Errorf("toggle %s failed: %s (code %d)", c.dnatFuncName, result.ErrMsg, result.Result)
+	if !callSuccess(env, fields) {
+		slog.Warn("iKuai DNAT toggle API error", "rule_id", id, "result", env.Result, "code", env.Code, "err_msg", callErrorMessage(env), "func_name", c.dnatFuncName)
+		return fmt.Errorf("toggle %s failed: %s (code %d)", c.dnatFuncName, callErrorMessage(env), callErrorCode(env))
 	}
 
 	slog.Info("iKuai DNAT toggle OK", "rule_id", id, "enabled", state, "func_name", c.dnatFuncName)

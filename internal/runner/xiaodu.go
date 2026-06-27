@@ -135,7 +135,21 @@ func (r *Runner) handleXiaoduTelegram(ctx context.Context, client *telegram.Clie
 		slog.Info("Xiaodu say via Telegram", "chat_id", chatID, "mode", used)
 		_ = client.SendMessage(ctx, chatIDStr, fmt.Sprintf("✅ Voice command sent (%s).", used))
 
+	case text == "/xiaodu_probe":
+		if err := RunXiaoduProbeNow(ctx, r.cfg.Xiaodu); err != nil {
+			_ = client.SendMessage(ctx, chatIDStr, "❌ Probe failed: "+err.Error())
+			return
+		}
+		_ = client.SendMessage(ctx, chatIDStr, "✅ Xiaodu speaker is online.")
+
+	case text == "/xiaodu_bduss_check":
+		if err := RunXiaoduBDUSSCheckNow(ctx, r.cfg.Xiaodu); err != nil {
+			_ = client.SendMessage(ctx, chatIDStr, "❌ BDUSS check failed: "+err.Error())
+			return
+		}
+		_ = client.SendMessage(ctx, chatIDStr, "✅ DuerOS BDUSS is valid.")
+
 	default:
-		_ = client.SendMessage(ctx, chatIDStr, "⚠️ Unknown Xiaodu command. Try /xiaodu_status, /xiaodu_volume, /xiaodu_tts, /xiaodu_say, /xiaodu_play, /xiaodu_stop, /xiaodu_pause, /xiaodu_mute, /xiaodu_unmute")
+		_ = client.SendMessage(ctx, chatIDStr, "⚠️ Unknown Xiaodu command. Try /xiaodu_status, /xiaodu_volume, /xiaodu_tts, /xiaodu_say, /xiaodu_play, /xiaodu_stop, /xiaodu_pause, /xiaodu_mute, /xiaodu_unmute, /xiaodu_probe, /xiaodu_bduss_check")
 	}
 }

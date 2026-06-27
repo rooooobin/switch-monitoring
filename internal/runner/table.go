@@ -369,6 +369,28 @@ func FormatDNATRulesTable(rules []adapter.DNATRule) string {
 	return sb.String()
 }
 
+// FormatXiaoduStatus renders Xiaodu speaker status as plain text.
+func FormatXiaoduStatus(st *adapter.XiaoduStatus) string {
+	if st == nil {
+		return "(no status)"
+	}
+	mute := "no"
+	if st.Muted {
+		mute = "yes"
+	}
+	dueros := "not configured"
+	switch {
+	case st.DuerOSScene:
+		dueros = "scene + DLP ready"
+	case st.DuerOSReady:
+		dueros = "DLP ready (scene_id missing)"
+	}
+	return fmt.Sprintf(
+		"Xiaodu Speaker\n  IP: %s:%d\n  Volume: %d/100\n  Muted: %s\n  Transport: %s\n  Position: %s / %s\n  DuerOS: %s",
+		st.IP, st.Port, st.Volume, mute, st.TransportState, st.Position, st.Duration, dueros,
+	)
+}
+
 func makeSepDNAT(colID, colStatus, colProto, colWan, colLan, colComment int) string {
 	parts := []string{
 		strings.Repeat("-", colID+2),

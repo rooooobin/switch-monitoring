@@ -26,7 +26,17 @@ func PrintSubcommandHelp(w io.Writer) {
   switch-monitor mihomo set-proxy <outbound-name>
   switch-monitor mihomo delay-proxy <proxy-name>
 
-Requires ikuai / mihomo sections enabled in the config file (same as Telegram).
+  switch-monitor xiaodu status
+  switch-monitor xiaodu volume <0-100>
+  switch-monitor xiaodu mute | unmute
+  switch-monitor xiaodu play <url> [title]
+  switch-monitor xiaodu stop | pause | seek <HH:MM:SS|seconds>
+  switch-monitor xiaodu tts <text>
+  switch-monitor xiaodu say <text>
+  switch-monitor xiaodu probe
+  switch-monitor xiaodu bduss-check
+
+Requires ikuai / mihomo / xiaodu sections enabled in the config file (same as Telegram).
 Mihomo delay uses latency_test_url and latency_timeout_ms from config when set.
 `)
 }

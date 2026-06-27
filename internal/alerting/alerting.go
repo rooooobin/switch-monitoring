@@ -179,6 +179,31 @@ func buildTelegramSummaryHTML(
 	return b.String()
 }
 
+// NotifyTelegramPlain sends a plain-text message to all enabled Telegram recipients.
+func NotifyTelegramPlain(cfg *config.TelegramConfig, message string) error {
+	if cfg == nil || !cfg.Enabled || len(cfg.Recipients) == 0 {
+		return nil
+	}
+	var errs []string
+	for _, rcpt := range cfg.Recipients {
+		client, err := telegram.NewClient(rcpt.Token, rcpt.Proxy)
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = client.SendMessage(ctx, rcpt.ChatID, message)
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("chat %s: %v", rcpt.ChatID, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("telegram notify: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
 func (s *AlertService) sendTelegramHTML(htmlMsg string, r config.TelegramRecipient) error {
 	client, err := telegram.NewClient(r.Token, r.Proxy)
 	if err != nil {

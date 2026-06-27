@@ -31,7 +31,7 @@ func RunXiaodu(ctx context.Context, cfg *config.MonitorConfig, args []string) er
 		return fmt.Errorf("xiaodu ip is required in config")
 	}
 	if len(args) < 1 {
-		return fmt.Errorf("xiaodu: expected subcommand (status, volume, mute, unmute, play, stop, pause, seek, tts, say)")
+		return fmt.Errorf("xiaodu: expected subcommand (status, volume, mute, unmute, play, stop, pause, seek, tts, say, probe, bduss-check)")
 	}
 
 	c := newXiaoduClient(cfg.Xiaodu)
@@ -135,6 +135,20 @@ func RunXiaodu(ctx context.Context, cfg *config.MonitorConfig, args []string) er
 			return err
 		}
 		fmt.Printf("Voice command sent (%s): %s\n", used, text)
+		return nil
+
+	case "probe":
+		if err := c.ProbeOnline(ctx); err != nil {
+			return fmt.Errorf("probe failed: %w", err)
+		}
+		fmt.Println("Xiaodu speaker is online (DLNA reachable).")
+		return nil
+
+	case "bduss-check":
+		if err := c.CheckBDUSS(ctx); err != nil {
+			return fmt.Errorf("bduss check failed: %w", err)
+		}
+		fmt.Println("DuerOS BDUSS is valid.")
 		return nil
 
 	default:

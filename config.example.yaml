@@ -74,6 +74,36 @@ ikuai:
   username: "admin"
   password: "your_password"
 
+# Xiaodu smart speaker — Telegram: /xiaodu_status, /xiaodu_tts, /xiaodu_probe, ...
+# CLI: xiaodu status | tts | say | probe | bduss-check | ...
+# DLNA control works with ip/port only; DuerOS cloud fields enable native TTS and voice commands.
+xiaodu:
+  enabled: false
+  ip: "192.168.1.162"
+  port: 49494
+  client_id: ""
+  cuid: ""
+  bduss: ""
+  scene_id: ""
+  # Alert TTS when confirmed port issues are sent (email/Telegram alert).
+  # mode: off (disabled) | always (any time) | window (only between start_time and end_time)
+  alert_tts:
+    mode: off
+    start_time: "08:00"
+    end_time: "22:00"
+    timezone: "Asia/Shanghai"
+    min_issues: 1
+  # Periodic DLNA reachability probe
+  probe:
+    enabled: false
+    interval_seconds: 600
+    notify_telegram: true
+  # Periodic DuerOS BDUSS validity check (requires client_id, cuid, bduss)
+  bduss_check:
+    enabled: false
+    interval_seconds: 86400
+    notify_telegram: true
+
 # Local Mihomo (Clash Meta) external-controller — Telegram: /list_proxy, /set_proxy, /delay_proxy
 # CLI: mihomo list-proxy | set-proxy | delay-proxy
 mihomo:

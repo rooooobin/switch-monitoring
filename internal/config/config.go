@@ -88,6 +88,29 @@ type IkuaiConfig struct {
 	Password string `yaml:"password"`
 }
 
+// XiaoduConfig holds settings for a Xiaodu smart speaker (DLNA + optional DuerOS cloud).
+type XiaoduConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	IP       string `yaml:"ip"`
+	Port     int    `yaml:"port"`
+	ClientID string `yaml:"client_id"`
+	CUID     string `yaml:"cuid"`
+	BDUSS    string `yaml:"bduss"`
+	SceneID  string `yaml:"scene_id"`
+
+	AlertTTS    *XiaoduAlertTTSConfig    `yaml:"alert_tts"`
+	Probe       *XiaoduProbeConfig       `yaml:"probe"`
+	BDUSSCheck  *XiaoduBDUSSCheckConfig  `yaml:"bduss_check"`
+}
+
+// PortOrDefault returns the DLNA port, defaulting to 49494.
+func (x *XiaoduConfig) PortOrDefault() int {
+	if x == nil || x.Port <= 0 {
+		return 49494
+	}
+	return x.Port
+}
+
 // MihomoInstance holds settings for a single Mihomo external-controller API.
 type MihomoInstance struct {
 	Name     string `yaml:"name"`
@@ -151,6 +174,7 @@ type MonitorConfig struct {
 	SMTP                   *SMTPConfig     `yaml:"smtp"`
 	Telegram               *TelegramConfig `yaml:"telegram"`
 	Ikuai                  *IkuaiConfig    `yaml:"ikuai"`
+	Xiaodu                 *XiaoduConfig   `yaml:"xiaodu"`
 	Mihomo                 *MihomoConfig   `yaml:"mihomo"`
 	Calendar               *CalendarConfig `yaml:"calendar"`
 	LogDir                 string          `yaml:"log_dir"`
@@ -205,6 +229,32 @@ type rawYAML struct {
 		Username string `yaml:"username"`
 		Password string `yaml:"password"`
 	} `yaml:"ikuai"`
+	Xiaodu *struct {
+		Enabled  bool   `yaml:"enabled"`
+		IP       string `yaml:"ip"`
+		Port     int    `yaml:"port"`
+		ClientID string `yaml:"client_id"`
+		CUID     string `yaml:"cuid"`
+		BDUSS    string `yaml:"bduss"`
+		SceneID  string `yaml:"scene_id"`
+		AlertTTS *struct {
+			Mode      string `yaml:"mode"`
+			StartTime string `yaml:"start_time"`
+			EndTime   string `yaml:"end_time"`
+			Timezone  string `yaml:"timezone"`
+			MinIssues int    `yaml:"min_issues"`
+		} `yaml:"alert_tts"`
+		Probe *struct {
+			Enabled         bool `yaml:"enabled"`
+			IntervalSeconds int  `yaml:"interval_seconds"`
+			NotifyTelegram  bool `yaml:"notify_telegram"`
+		} `yaml:"probe"`
+		BDUSSCheck *struct {
+			Enabled         bool `yaml:"enabled"`
+			IntervalSeconds int  `yaml:"interval_seconds"`
+			NotifyTelegram  bool `yaml:"notify_telegram"`
+		} `yaml:"bduss_check"`
+	} `yaml:"xiaodu"`
 	Mihomo *struct {
 		Enabled   bool   `yaml:"enabled"`
 		LatencyTestURL   string `yaml:"latency_test_url"`
@@ -372,6 +422,42 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 			Username: raw.Ikuai.Username,
 			Password: raw.Ikuai.Password,
 		}
+	}
+
+	if raw.Xiaodu != nil {
+		x := &XiaoduConfig{
+			Enabled:  raw.Xiaodu.Enabled,
+			IP:       strings.TrimSpace(raw.Xiaodu.IP),
+			Port:     raw.Xiaodu.Port,
+			ClientID: strings.TrimSpace(raw.Xiaodu.ClientID),
+			CUID:     strings.TrimSpace(raw.Xiaodu.CUID),
+			BDUSS:    strings.TrimSpace(raw.Xiaodu.BDUSS),
+			SceneID:  strings.TrimSpace(raw.Xiaodu.SceneID),
+		}
+		if raw.Xiaodu.AlertTTS != nil {
+			x.AlertTTS = &XiaoduAlertTTSConfig{
+				Mode:      strings.TrimSpace(raw.Xiaodu.AlertTTS.Mode),
+				StartTime: strings.TrimSpace(raw.Xiaodu.AlertTTS.StartTime),
+				EndTime:   strings.TrimSpace(raw.Xiaodu.AlertTTS.EndTime),
+				Timezone:  strings.TrimSpace(raw.Xiaodu.AlertTTS.Timezone),
+				MinIssues: raw.Xiaodu.AlertTTS.MinIssues,
+			}
+		}
+		if raw.Xiaodu.Probe != nil {
+			x.Probe = &XiaoduProbeConfig{
+				Enabled:         raw.Xiaodu.Probe.Enabled,
+				IntervalSeconds: raw.Xiaodu.Probe.IntervalSeconds,
+				NotifyTelegram:  raw.Xiaodu.Probe.NotifyTelegram,
+			}
+		}
+		if raw.Xiaodu.BDUSSCheck != nil {
+			x.BDUSSCheck = &XiaoduBDUSSCheckConfig{
+				Enabled:         raw.Xiaodu.BDUSSCheck.Enabled,
+				IntervalSeconds: raw.Xiaodu.BDUSSCheck.IntervalSeconds,
+				NotifyTelegram:  raw.Xiaodu.BDUSSCheck.NotifyTelegram,
+			}
+		}
+		cfg.Xiaodu = x
 	}
 
 	if raw.Mihomo != nil {

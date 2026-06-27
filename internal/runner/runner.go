@@ -47,6 +47,7 @@ type Runner struct {
 	historyPath  string
 	cfgModTime   time.Time
 	triggerChan  chan struct{}
+	health       xiaoduHealthState
 }
 
 // New creates a Runner from the given config.
@@ -280,6 +281,9 @@ func (r *Runner) RunOnce(isManual bool) {
 			slog.Error("Failed to send summary alert", "error", err)
 		} else {
 			slog.Info("Sent summary alert", "issues", len(runEvents), "manual", isManual)
+			if len(runEvents) > 0 {
+				r.maybeAlertTTS(context.Background(), runEvents, aliasesBySwitch)
+			}
 		}
 	} else {
 		slog.Warn("No SMTP/Telegram configured; issues not alerted", "count", len(runEvents))
@@ -313,6 +317,7 @@ func (r *Runner) RunLoop(once bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go r.pollTelegramCommands(ctx)
+	go r.runXiaoduHealthLoop(ctx)
 
 	isManual := false
 	for {
@@ -554,6 +559,12 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 					}
 					_ = client.SendMessageHTML(ctx, chatIDStr, resultSb.String())
 				}
+			} else if isXiaoduCommand(text) {
+				if !r.isAuthorizedTelegramChat(update.Message.Chat.ID) {
+					slog.Warn("Received xiaodu command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID, "command", text)
+					continue
+				}
+				r.handleXiaoduTelegram(ctx, client, chatIDStr, text, update.Message.Chat.ID)
 			}
 		}
 

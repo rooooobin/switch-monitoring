@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"html"
-	"sort"
 	"strings"
 	"time"
 
@@ -14,10 +13,10 @@ import (
 
 // LLMUsageReport holds fetched provider data for display.
 type LLMUsageReport struct {
-	FetchedAt time.Time
-	DeepSeek  *adapter.DeepSeekBalance
+	FetchedAt   time.Time
+	DeepSeek    *adapter.DeepSeekBalance
 	DeepSeekErr error
-	Bailian   *adapter.DashScopeQuotas
+	Bailian     *adapter.BailianPlanUsage
 	BailianErr  error
 }
 
@@ -53,11 +52,16 @@ func FetchLLMUsageScoped(ctx context.Context, cfg *config.LLMUsageConfig, scope 
 	}
 
 	if cfg.BailianConfigured() && scope != LLMUsageDeepSeekOnly {
-		client, err := adapter.NewDashScopeClient(cfg.Bailian.APIBase, cfg.Bailian.APIKey, proxy)
+		cookie, err := adapter.LoadBailianConsoleCookie(cfg.Bailian.ConsoleCookie, cfg.Bailian.ConsoleCookieFile)
 		if err != nil {
 			report.BailianErr = err
 		} else {
-			report.Bailian, report.BailianErr = client.GetQuotas(ctx)
+			client, err := adapter.NewBailianPlanClient(cfg.BailianPlan(), cookie, proxy, cfg.Bailian.PreferBLCLI || cookie == "")
+			if err != nil {
+				report.BailianErr = err
+			} else {
+				report.Bailian, report.BailianErr = client.GetUsage(ctx)
+			}
 		}
 	}
 	return report
@@ -123,50 +127,58 @@ func FormatLLMUsagePlainScoped(report LLMUsageReport, cfg *config.LLMUsageConfig
 		}
 	}
 	if wantBL {
-		sb.WriteString("\n--- 阿里云百炼 (DashScope) ---\n")
+		sb.WriteString("\n--- 阿里云百炼 ---\n")
 		if report.BailianErr != nil {
 			sb.WriteString("Error: " + report.BailianErr.Error() + "\n")
 		} else if report.Bailian != nil {
-			appendBailianPlain(&sb, report.Bailian)
+			appendBailianPlanPlain(&sb, report.Bailian)
 		}
 	}
 	return sb.String()
 }
 
-func appendBailianPlain(sb *strings.Builder, q *adapter.DashScopeQuotas) {
-	if q.BillingStart != "" || q.BillingEnd != "" {
-		sb.WriteString(fmt.Sprintf("Billing period: %s — %s\n", q.BillingStart, q.BillingEnd))
+func appendBailianPlanPlain(sb *strings.Builder, u *adapter.BailianPlanUsage) {
+	sb.WriteString(fmt.Sprintf("Plan: %s (%s)\n", u.PlanName, u.PlanKind))
+	if u.Status != "" {
+		sb.WriteString("Status: " + u.Status + "\n")
 	}
-	if q.Available != nil {
-		sb.WriteString(fmt.Sprintf("Available balance: $%.4f\n", *q.Available))
+	if u.RemainingDays != nil {
+		sb.WriteString(fmt.Sprintf("Subscription remaining days: %d\n", *u.RemainingDays))
 	}
-	if q.Credits != nil {
-		sb.WriteString(fmt.Sprintf("Credits: $%.4f\n", *q.Credits))
+	if u.HasEndsAt {
+		sb.WriteString("Subscription ends: " + u.EndsAt.Local().Format("2006-01-02 15:04 MST") + "\n")
 	}
-	if q.DailySpend != nil {
-		sb.WriteString(fmt.Sprintf("Daily spend (1d): $%.4f\n", *q.DailySpend))
+	if u.Source != "" {
+		sb.WriteString("Source: " + u.Source + "\n")
 	}
-	if q.MonthlySpend != nil {
-		sb.WriteString(fmt.Sprintf("Monthly spend (30d): $%.4f\n", *q.MonthlySpend))
+	if len(u.Windows) == 0 {
+		sb.WriteString("No usage windows returned.\n")
+		return
 	}
-	if q.TokensUsed != nil {
-		sb.WriteString(fmt.Sprintf("Tokens used (period): %.0f\n", *q.TokensUsed))
+	sb.WriteString("\n")
+	for _, w := range u.Windows {
+		sb.WriteString(formatBailianWindowPlain(w) + "\n")
 	}
-	if q.RequestsUsed != nil {
-		sb.WriteString(fmt.Sprintf("Requests used (period): %.0f\n", *q.RequestsUsed))
+}
+
+func formatBailianWindowPlain(w adapter.BailianUsageWindow) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("[%s] used %.1f%%", w.Name, w.UsedPct))
+	if w.HasTotals {
+		b.WriteString(fmt.Sprintf(" | used %s / total %s | remaining %s",
+			formatCredits(w.Used), formatCredits(w.Total), formatCredits(w.Remaining)))
 	}
-	if q.RPM != nil || q.TPM != nil {
-		sb.WriteString(fmt.Sprintf("Account rate limits: RPM=%s TPM=%s\n", intOrDash(q.RPM), intOrDash(q.TPM)))
+	if w.HasReset {
+		b.WriteString(" | resets " + w.ResetsAt.Local().Format("2006-01-02 15:04 MST"))
 	}
-	if len(q.Models) > 0 {
-		sb.WriteString("\nPer-model quota usage:\n")
-		for _, line := range formatModelQuotaLines(q.Models, 8) {
-			sb.WriteString("  " + line + "\n")
-		}
-		if len(q.Models) > 8 {
-			sb.WriteString(fmt.Sprintf("  … and %d more models\n", len(q.Models)-8))
-		}
+	return b.String()
+}
+
+func formatCredits(v float64) string {
+	if v == float64(int64(v)) {
+		return fmt.Sprintf("%.0f", v)
 	}
+	return fmt.Sprintf("%.2f", v)
 }
 
 // FormatLLMUsageHTML formats the report for Telegram HTML mode.
@@ -180,7 +192,7 @@ func FormatLLMUsageHTMLScoped(report LLMUsageReport, cfg *config.LLMUsageConfig,
 	}
 	wantDS, wantBL := formatScopeHint(scope, cfg)
 	if !wantDS && !wantBL {
-		return "⚠️ <b>LLM usage</b>\nNo providers configured for this command. Enable <code>llm_usage.deepseek</code> or <code>llm_usage.bailian</code> with an API key."
+		return "⚠️ <b>LLM usage</b>\nNo providers configured for this command. Enable <code>llm_usage.deepseek</code> or <code>llm_usage.bailian</code> with an API key / console cookie."
 	}
 
 	var parts []string
@@ -218,59 +230,26 @@ func FormatLLMUsageHTMLScoped(report LLMUsageReport, cfg *config.LLMUsageConfig,
 		if report.BailianErr != nil {
 			block.WriteString("❌ " + html.EscapeString(report.BailianErr.Error()))
 		} else if report.Bailian != nil {
-			q := report.Bailian
-			if q.BillingStart != "" || q.BillingEnd != "" {
-				block.WriteString(fmt.Sprintf("Period: <code>%s</code> → <code>%s</code>\n",
-					html.EscapeString(q.BillingStart), html.EscapeString(q.BillingEnd)))
+			u := report.Bailian
+			block.WriteString(fmt.Sprintf("Plan: <b>%s</b> (<code>%s</code>)\n", html.EscapeString(u.PlanName), html.EscapeString(u.PlanKind)))
+			if u.Status != "" {
+				block.WriteString("Status: <code>" + html.EscapeString(u.Status) + "</code>\n")
 			}
-			if q.MonthlySpend != nil {
-				block.WriteString(fmt.Sprintf("Monthly spend: <b>$%.4f</b>\n", *q.MonthlySpend))
+			if u.RemainingDays != nil {
+				block.WriteString(fmt.Sprintf("Days left: <code>%d</code>\n", *u.RemainingDays))
 			}
-			if q.DailySpend != nil {
-				block.WriteString(fmt.Sprintf("Daily spend: <code>$%.4f</code>\n", *q.DailySpend))
+			if u.HasEndsAt {
+				block.WriteString("Ends: <code>" + html.EscapeString(u.EndsAt.Local().Format("2006-01-02 15:04")) + "</code>\n")
 			}
-			if q.TokensUsed != nil {
-				block.WriteString(fmt.Sprintf("Tokens used: <b>%.0f</b>\n", *q.TokensUsed))
+			block.WriteString("<pre>")
+			for _, w := range u.Windows {
+				block.WriteString(html.EscapeString(formatBailianWindowPlain(w)) + "\n")
 			}
-			if q.RequestsUsed != nil {
-				block.WriteString(fmt.Sprintf("Requests: <code>%.0f</code>\n", *q.RequestsUsed))
-			}
-			if q.Available != nil {
-				block.WriteString(fmt.Sprintf("Available: <code>$%.4f</code>\n", *q.Available))
-			}
-			if len(q.Models) > 0 {
-				block.WriteString("\n<pre>")
-				for _, line := range formatModelQuotaLines(q.Models, 12) {
-					block.WriteString(html.EscapeString(line) + "\n")
-				}
-				block.WriteString("</pre>")
-			}
+			block.WriteString("</pre>")
 		}
 		parts = append(parts, block.String())
 	}
 	return strings.Join(parts, "")
-}
-
-func formatModelQuotaLines(models map[string]adapter.DashScopeModelQuota, max int) []string {
-	names := make([]string, 0, len(models))
-	for name := range models {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	if max > 0 && len(names) > max {
-		names = names[:max]
-	}
-	var lines []string
-	for _, name := range names {
-		m := models[name]
-		if m.Used != nil && m.Limit != nil && *m.Limit > 0 {
-			pct := (*m.Used / *m.Limit) * 100
-			lines = append(lines, fmt.Sprintf("%s: %.0f/%.0f (%.1f%%)", name, *m.Used, *m.Limit, pct))
-		} else if m.Used != nil {
-			lines = append(lines, fmt.Sprintf("%s: used %.0f", name, *m.Used))
-		}
-	}
-	return lines
 }
 
 func intOrDash(v *int) string {

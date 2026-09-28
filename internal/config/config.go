@@ -280,9 +280,13 @@ type rawYAML struct {
 			APIBase string `yaml:"api_base"`
 		} `yaml:"deepseek"`
 		Bailian *struct {
-			Enabled bool   `yaml:"enabled"`
-			APIKey  string `yaml:"api_key"`
-			APIBase string `yaml:"api_base"`
+			Enabled           bool   `yaml:"enabled"`
+			APIKey            string `yaml:"api_key"`
+			APIBase           string `yaml:"api_base"`
+			Plan              string `yaml:"plan"`
+			ConsoleCookie     string `yaml:"console_cookie"`
+			ConsoleCookieFile string `yaml:"console_cookie_file"`
+			PreferBLCLI       bool   `yaml:"prefer_bl_cli"`
 		} `yaml:"bailian"`
 	} `yaml:"llm_usage"`
 	Calendar *struct {
@@ -520,9 +524,13 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 		}
 		if raw.LLMUsage.Bailian != nil {
 			lu.Bailian = LLMProviderConfig{
-				Enabled: raw.LLMUsage.Bailian.Enabled,
-				APIKey:  strings.TrimSpace(raw.LLMUsage.Bailian.APIKey),
-				APIBase: strings.TrimSpace(raw.LLMUsage.Bailian.APIBase),
+				Enabled:           raw.LLMUsage.Bailian.Enabled,
+				APIKey:            strings.TrimSpace(raw.LLMUsage.Bailian.APIKey),
+				APIBase:           strings.TrimSpace(raw.LLMUsage.Bailian.APIBase),
+				Plan:              strings.TrimSpace(raw.LLMUsage.Bailian.Plan),
+				ConsoleCookie:     strings.TrimSpace(raw.LLMUsage.Bailian.ConsoleCookie),
+				ConsoleCookieFile: strings.TrimSpace(raw.LLMUsage.Bailian.ConsoleCookieFile),
+				PreferBLCLI:       raw.LLMUsage.Bailian.PreferBLCLI,
 			}
 		}
 		cfg.LLMUsage = lu

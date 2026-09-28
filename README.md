@@ -187,7 +187,27 @@ Query prepaid balance and spend via provider APIs (requires `telegram.listen_com
 
 CLI: `llm usage`, `llm deepseek`, `llm bailian`
 
-DeepSeek does not publish a token-spend history API; the integration reports **remaining balance**. 百炼 returns **daily/monthly spend**, **tokens_used**, and optional per-model quota usage from the quotas endpoint.
+DeepSeek does not publish a token-spend history API; the integration reports **remaining balance**.
+
+For 阿里云百炼, switch-monitor queries **Token Plan Personal / Coding Plan** usage windows (**used / remaining / reset time**), not DashScope `/quotas` model rate limits.
+
+| Key | Description |
+|-----|-------------|
+| `llm_usage.bailian.plan` | `token_plan_personal` (default/auto) or `coding_plan` |
+| `llm_usage.bailian.api_key` | Plan API key (`sk-sp-…` / `sk-ws-…`); optional if cookie/`bl` is set |
+| `llm_usage.bailian.console_cookie` | Cookie header from Bailian console (required unless using `bl`) |
+| `llm_usage.bailian.console_cookie_file` | Path to a file containing that cookie header |
+| `llm_usage.bailian.prefer_bl_cli` | Prefer `bl usage` / `bl console call` when Bailian CLI has console login |
+
+Console session is required because Alibaba does not expose used/remaining/reset on the DashScope API Key alone. One-time setup on the host:
+
+```bash
+npm install -g bailian-cli
+bl auth login --console   # browser login
+# then prefer_bl_cli: true
+```
+
+Or paste a fresh `Cookie:` from DevTools on the Token Plan page into `console_cookie` / `console_cookie_file`.
 
 ### iKuai Router
 

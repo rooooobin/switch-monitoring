@@ -6,14 +6,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const defaultDashScopeBase = "https://dashscope.aliyuncs.com/api/v1"
 
-// DashScopeQuotas is billing and usage from GET /quotas (阿里云百炼 / DashScope).
+// DashScopeQuotas is the parsed GET /quotas response (阿里云百炼 / DashScope).
+// CN accounts typically return paginated per-model rate/usage *limits* under output.quotas
+// (not historical spend). Some regions/products may also return billing fields under data.
 type DashScopeQuotas struct {
+	// Kind is "model_limits" and/or "billing" depending on what the API returned.
+	Kind string
+
 	Available    *float64
 	Credits      *float64
 	SpendLimit   *float64
@@ -25,15 +33,52 @@ type DashScopeQuotas struct {
 	TPM          *int
 	BillingStart string
 	BillingEnd   string
-	Models       map[string]DashScopeModelQuota
+
+	TotalModels int
+	PageNo      int
+	PageSize    int
+	Models      []DashScopeModelQuota
+
+	RawKeys    string
+	RawSnippet string
 }
 
-// DashScopeModelQuota is per-model quota usage when returned by the API.
+// DashScopeModelQuota is one model's limit (and optional used/limit when present).
 type DashScopeModelQuota struct {
-	Used  *float64
-	Limit *float64
-	RPM   *int
-	TPM   *int
+	Name            string
+	WorkspaceID     string
+	Used            *float64
+	Limit           *float64
+	RPM             *int
+	TPM             *int
+	RequestLimit    *int
+	RequestPeriodS  *int
+	UsageLimit      *float64
+	UsageLimitField string
+	UsagePeriodS    *int
+}
+
+// HasAnyMetric reports whether any usage/balance/limit field was parsed.
+func (q *DashScopeQuotas) HasAnyMetric() bool {
+	if q == nil {
+		return false
+	}
+	return q.Available != nil || q.Credits != nil || q.SpendLimit != nil ||
+		q.DailySpend != nil || q.MonthlySpend != nil ||
+		q.TokensUsed != nil || q.RequestsUsed != nil ||
+		q.RPM != nil || q.TPM != nil ||
+		q.BillingStart != "" || q.BillingEnd != "" ||
+		len(q.Models) > 0
+}
+
+// HasBilling reports whether spend/balance style fields were present.
+func (q *DashScopeQuotas) HasBilling() bool {
+	if q == nil {
+		return false
+	}
+	return q.Available != nil || q.Credits != nil || q.SpendLimit != nil ||
+		q.DailySpend != nil || q.MonthlySpend != nil ||
+		q.TokensUsed != nil || q.RequestsUsed != nil
 }
 
 // DashScopeClient queries DashScope quota/billing APIs.
@@ -51,6 +96,8 @@ func NewDashScopeClient(apiBase, apiKey, proxy string) (*DashScopeClient, error)
 		base = defaultDashScopeBase
 	}
 	key := strings.TrimSpace(apiKey)
+	key = strings.TrimPrefix(key, "Bearer ")
+	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil, fmt.Errorf("bailian/dashscope: api_key is required")
 	}
@@ -61,39 +108,18 @@ func NewDashScopeClient(apiBase, apiKey, proxy string) (*DashScopeClient, error)
 	return &DashScopeClient{base: base, apiKey: key, client: hc}, nil
 }
 
-type dashScopeQuotasResponse struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Data    struct {
-		Available    *float64                       `json:"available"`
-		Credits      *float64                       `json:"credits"`
-		SpendLimit   *float64                       `json:"spend_limit"`
-		DailySpend   *float64                       `json:"daily_spend"`
-		MonthlySpend *float64                       `json:"monthly_spend"`
-		TokensUsed   *float64                       `json:"tokens_used"`
-		RequestsUsed *float64                       `json:"requests_used"`
-		RateLimit    *struct {
-			RPM *int `json:"rpm"`
-			TPM *int `json:"tpm"`
-		} `json:"rate_limit"`
-		Models        map[string]dashScopeModelQuotaJSON `json:"models"`
-		BillingPeriod *struct {
-			Start string `json:"start"`
-			End   string `json:"end"`
-		} `json:"billing_period"`
-	} `json:"data"`
-}
-
-type dashScopeModelQuotaJSON struct {
-	RPM   *int     `json:"rpm"`
-	TPM   *int     `json:"tpm"`
-	Used  *float64 `json:"used"`
-	Limit *float64 `json:"limit"`
-}
-
-// GetQuotas returns account spend and token usage aggregates from DashScope.
+// GetQuotas returns quotas from DashScope (model limits and/or billing aggregates when available).
 func (c *DashScopeClient) GetQuotas(ctx context.Context) (*DashScopeQuotas, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/quotas", nil)
+	u, err := url.Parse(c.base + "/quotas")
+	if err != nil {
+		return nil, err
+	}
+	q := u.Query()
+	q.Set("page_no", "1")
+	q.Set("page_size", "50")
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -111,39 +137,228 @@ func (c *DashScopeClient) GetQuotas(ctx context.Context) (*DashScopeQuotas, erro
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET /quotas: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
-	var parsed dashScopeQuotasResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	return parseDashScopeQuotasBody(body)
+}
+
+func parseDashScopeQuotasBody(body []byte) (*DashScopeQuotas, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
 		return nil, fmt.Errorf("decode quotas: %w", err)
 	}
-	if parsed.Code != "" && parsed.Code != "Success" {
-		return nil, fmt.Errorf("dashscope API %s: %s", parsed.Code, parsed.Message)
+
+	if code := jsonString(root["code"]); code != "" && !isDashScopeOKCode(code) {
+		msg := jsonString(root["message"])
+		if msg == "" {
+			msg = "(no message)"
+		}
+		return nil, fmt.Errorf("dashscope API %s: %s", code, msg)
 	}
 
+	payload, payloadKey := pickPayload(root)
 	out := &DashScopeQuotas{
-		Available:    parsed.Data.Available,
-		Credits:      parsed.Data.Credits,
-		SpendLimit:   parsed.Data.SpendLimit,
-		DailySpend:   parsed.Data.DailySpend,
-		MonthlySpend: parsed.Data.MonthlySpend,
-		TokensUsed:   parsed.Data.TokensUsed,
-		RequestsUsed: parsed.Data.RequestsUsed,
-		Models:       make(map[string]DashScopeModelQuota),
+		RawKeys: strings.Join(sortedRawKeys(root), ","),
 	}
-	if parsed.Data.RateLimit != nil {
-		out.RPM = parsed.Data.RateLimit.RPM
-		out.TPM = parsed.Data.RateLimit.TPM
+	if payloadKey != "" {
+		out.RawKeys += " | payload=" + payloadKey + ":" + strings.Join(sortedRawKeys(payload), ",")
 	}
-	if parsed.Data.BillingPeriod != nil {
-		out.BillingStart = parsed.Data.BillingPeriod.Start
-		out.BillingEnd = parsed.Data.BillingPeriod.End
+
+	fillQuotasFromMap(out, payload)
+
+	if out.HasBilling() && len(out.Models) > 0 {
+		out.Kind = "billing+model_limits"
+	} else if out.HasBilling() {
+		out.Kind = "billing"
+	} else if len(out.Models) > 0 {
+		out.Kind = "model_limits"
 	}
-	for name, m := range parsed.Data.Models {
-		out.Models[name] = DashScopeModelQuota{
-			Used:  m.Used,
-			Limit: m.Limit,
-			RPM:   m.RPM,
-			TPM:   m.TPM,
-		}
+
+	if !out.HasAnyMetric() {
+		out.RawSnippet = truncateForLog(body, 400)
 	}
 	return out, nil
+}
+
+func pickPayload(root map[string]json.RawMessage) (map[string]json.RawMessage, string) {
+	for _, key := range []string{"data", "output", "result"} {
+		if raw, ok := root[key]; ok && len(raw) > 0 && string(raw) != "null" {
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &m); err == nil {
+				return m, key
+			}
+		}
+	}
+	return root, "root"
+}
+
+func fillQuotasFromMap(out *DashScopeQuotas, m map[string]json.RawMessage) {
+	out.Available = jsonFloat(m, "available", "available_balance", "balance")
+	out.Credits = jsonFloat(m, "credits", "credit", "credit_balance")
+	out.SpendLimit = jsonFloat(m, "spend_limit", "spendLimit")
+	out.DailySpend = jsonFloat(m, "daily_spend", "dailySpend", "day_spend")
+	out.MonthlySpend = jsonFloat(m, "monthly_spend", "monthlySpend", "month_spend")
+	out.TokensUsed = jsonFloat(m, "tokens_used", "tokensUsed", "token_used", "usage", "total_tokens")
+	out.RequestsUsed = jsonFloat(m, "requests_used", "requestsUsed", "request_used", "total_requests")
+
+	if rl := nestedMap(m, "rate_limit", "rateLimit"); rl != nil {
+		out.RPM = jsonInt(rl, "rpm", "RPM")
+		out.TPM = jsonInt(rl, "tpm", "TPM")
+	} else {
+		out.RPM = jsonInt(m, "rpm", "RPM")
+		out.TPM = jsonInt(m, "tpm", "TPM")
+	}
+
+	if bp := nestedMap(m, "billing_period", "billingPeriod", "billing_cycle"); bp != nil {
+		out.BillingStart = firstNonEmpty(jsonString(bp["start"]), jsonString(bp["begin"]))
+		out.BillingEnd = firstNonEmpty(jsonString(bp["end"]), jsonString(bp["finish"]))
+	}
+
+	if v := jsonInt(m, "total"); v != nil {
+		out.TotalModels = *v
+	}
+	if v := jsonInt(m, "page_no", "pageNo"); v != nil {
+		out.PageNo = *v
+	}
+	if v := jsonInt(m, "page_size", "pageSize"); v != nil {
+		out.PageSize = *v
+	}
+
+	if raw, ok := m["models"]; ok {
+		out.Models = append(out.Models, parseModelsList(raw)...)
+	}
+	if raw, ok := m["quotas"]; ok {
+		out.Models = append(out.Models, parseModelsList(raw)...)
+	}
+	sort.Slice(out.Models, func(i, j int) bool { return out.Models[i].Name < out.Models[j].Name })
+}
+
+func parseModelsList(raw json.RawMessage) []DashScopeModelQuota {
+	var out []DashScopeModelQuota
+
+	var asMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &asMap); err == nil {
+		for name, item := range asMap {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(item, &fields); err != nil {
+				continue
+			}
+			q := modelQuotaFromMap(name, fields)
+			out = append(out, q)
+		}
+		return out
+	}
+
+	var asArr []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &asArr); err == nil {
+		for _, fields := range asArr {
+			name := firstNonEmpty(jsonString(fields["model"]), jsonString(fields["name"]), jsonString(fields["model_name"]))
+			if name == "" {
+				continue
+			}
+			out = append(out, modelQuotaFromMap(name, fields))
+		}
+	}
+	return out
+}
+
+func modelQuotaFromMap(name string, fields map[string]json.RawMessage) DashScopeModelQuota {
+	q := DashScopeModelQuota{
+		Name:        name,
+		WorkspaceID: jsonString(fields["workspace_id"]),
+		Used:        jsonFloat(fields, "used", "usage"),
+		Limit:       jsonFloat(fields, "limit"),
+		RPM:         jsonInt(fields, "rpm"),
+		TPM:         jsonInt(fields, "tpm"),
+	}
+	if nested := nestedMap(fields, "model_limit", "workspace_limit"); nested != nil {
+		q.RequestLimit = jsonInt(nested, "request_limit")
+		q.RequestPeriodS = jsonInt(nested, "request_limit_period")
+		q.UsageLimit = jsonFloat(nested, "usage_limit")
+		q.UsageLimitField = jsonString(nested["usage_limit_field"])
+		q.UsagePeriodS = jsonInt(nested, "usage_limit_period")
+		if q.Limit == nil {
+			q.Limit = q.UsageLimit
+		}
+	}
+	return q
+}
+
+func isDashScopeOKCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "success", "ok", "200":
+		return true
+	default:
+		return false
+	}
+}
+
+func nestedMap(m map[string]json.RawMessage, keys ...string) map[string]json.RawMessage {
+	for _, k := range keys {
+		raw, ok := m[k]
+		if !ok || len(raw) == 0 || string(raw) == "null" {
+			continue
+		}
+		var out map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &out); err == nil {
+			return out
+		}
+	}
+	return nil
+}
+
+func jsonString(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return strings.Trim(string(raw), `"`)
+}
+
+func jsonFloat(m map[string]json.RawMessage, keys ...string) *float64 {
+	for _, k := range keys {
+		raw, ok := m[k]
+		if !ok || len(raw) == 0 || string(raw) == "null" {
+			continue
+		}
+		var f float64
+		if err := json.Unmarshal(raw, &f); err == nil {
+			return &f
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+				return &v
+			}
+		}
+	}
+	return nil
+}
+
+func jsonInt(m map[string]json.RawMessage, keys ...string) *int {
+	f := jsonFloat(m, keys...)
+	if f == nil {
+		return nil
+	}
+	v := int(*f)
+	return &v
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func sortedRawKeys(m map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

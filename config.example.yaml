@@ -124,20 +124,26 @@ mihomo:
 
 # LLM API spend / balance — Telegram: /llm_usage, /deepseek_balance, /bailian_usage
 # CLI: llm usage | deepseek | bailian
-# DeepSeek: GET /user/balance (prepaid balance; no token history API).
-# 百炼 (DashScope): GET /api/v1/quotas (monthly/daily spend, tokens_used, per-model quotas).
+# DeepSeek: GET /user/balance (prepaid balance).
+# 百炼 Token Plan / Coding Plan: used / remaining / reset via console session
+#   (console_cookie or `bl auth login --console`), NOT DashScope /quotas model limits.
 llm_usage:
   enabled: false
-  proxy: ""   # optional HTTP(S) proxy for provider APIs
+  proxy: ""
   deepseek:
     enabled: false
     api_key: "sk-xxxxxxxx"
-    # api_base: "https://api.deepseek.com"
   bailian:
     enabled: false
-    api_key: "sk-xxxxxxxx"
-    # api_base: "https://dashscope.aliyuncs.com/api/v1"
-    # Singapore: https://dashscope-intl.aliyuncs.com/api/v1
+    # auto | token_plan_personal | coding_plan
+    plan: token_plan_personal
+    # Token Plan key starts with sk-sp-; Coding Plan often sk-ws- / sk-sp-
+    api_key: "sk-sp-xxxxxxxx"
+    # Required for live used/remaining/reset (console cookie header from browser Network tab)
+    # console_cookie: "login_aliyunid_ticket=...; ..."
+    # console_cookie_file: "/home/rhuang/.bailian/console.cookie"
+    # Or: install bailian-cli, run `bl auth login --console`, then set prefer_bl_cli: true
+    prefer_bl_cli: true
 
 # Logging
 log_dir: logs

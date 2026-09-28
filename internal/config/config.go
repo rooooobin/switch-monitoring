@@ -176,6 +176,7 @@ type MonitorConfig struct {
 	Ikuai                  *IkuaiConfig    `yaml:"ikuai"`
 	Xiaodu                 *XiaoduConfig   `yaml:"xiaodu"`
 	Mihomo                 *MihomoConfig   `yaml:"mihomo"`
+	LLMUsage               *LLMUsageConfig `yaml:"llm_usage"`
 	Calendar               *CalendarConfig `yaml:"calendar"`
 	LogDir                 string          `yaml:"log_dir"`
 	LogFile                string          `yaml:"log_file"`
@@ -270,6 +271,20 @@ type rawYAML struct {
 			Selector string `yaml:"selector"`
 		} `yaml:"instances"`
 	} `yaml:"mihomo"`
+	LLMUsage *struct {
+		Enabled bool   `yaml:"enabled"`
+		Proxy   string `yaml:"proxy"`
+		DeepSeek *struct {
+			Enabled bool   `yaml:"enabled"`
+			APIKey  string `yaml:"api_key"`
+			APIBase string `yaml:"api_base"`
+		} `yaml:"deepseek"`
+		Bailian *struct {
+			Enabled bool   `yaml:"enabled"`
+			APIKey  string `yaml:"api_key"`
+			APIBase string `yaml:"api_base"`
+		} `yaml:"bailian"`
+	} `yaml:"llm_usage"`
 	Calendar *struct {
 		Enabled               bool   `yaml:"enabled"`
 		Provider              string `yaml:"provider"`
@@ -489,6 +504,28 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 				Selector: strings.TrimSpace(raw.Mihomo.Selector),
 			})
 		}
+	}
+
+	if raw.LLMUsage != nil {
+		lu := &LLMUsageConfig{
+			Enabled: raw.LLMUsage.Enabled,
+			Proxy:   strings.TrimSpace(raw.LLMUsage.Proxy),
+		}
+		if raw.LLMUsage.DeepSeek != nil {
+			lu.DeepSeek = LLMProviderConfig{
+				Enabled: raw.LLMUsage.DeepSeek.Enabled,
+				APIKey:  strings.TrimSpace(raw.LLMUsage.DeepSeek.APIKey),
+				APIBase: strings.TrimSpace(raw.LLMUsage.DeepSeek.APIBase),
+			}
+		}
+		if raw.LLMUsage.Bailian != nil {
+			lu.Bailian = LLMProviderConfig{
+				Enabled: raw.LLMUsage.Bailian.Enabled,
+				APIKey:  strings.TrimSpace(raw.LLMUsage.Bailian.APIKey),
+				APIBase: strings.TrimSpace(raw.LLMUsage.Bailian.APIBase),
+			}
+		}
+		cfg.LLMUsage = lu
 	}
 
 	if raw.Calendar != nil {

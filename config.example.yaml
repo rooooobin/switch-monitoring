@@ -122,6 +122,23 @@ mihomo:
     #   secret: "my_secret"
     #   selector: "PROXY"
 
+# LLM API spend / balance — Telegram: /llm_usage, /deepseek_balance, /bailian_usage
+# CLI: llm usage | deepseek | bailian
+# DeepSeek: GET /user/balance (prepaid balance; no token history API).
+# 百炼 (DashScope): GET /api/v1/quotas (monthly/daily spend, tokens_used, per-model quotas).
+llm_usage:
+  enabled: false
+  proxy: ""   # optional HTTP(S) proxy for provider APIs
+  deepseek:
+    enabled: false
+    api_key: "sk-xxxxxxxx"
+    # api_base: "https://api.deepseek.com"
+  bailian:
+    enabled: false
+    api_key: "sk-xxxxxxxx"
+    # api_base: "https://dashscope.aliyuncs.com/api/v1"
+    # Singapore: https://dashscope-intl.aliyuncs.com/api/v1
+
 # Logging
 log_dir: logs
 log_file: switch_monitor.log

@@ -21,6 +21,7 @@ Optional integrations: **iKuai** router DNAT control, **Mihomo** (Clash Meta) pr
 - **Telegram command support** — trigger checks and control integrations from your bot
 - **iKuai integration** — list/enable/disable DNAT rules (iKuai 3.x and 4.x API compatible)
 - **Mihomo (Clash Meta) integration** — list/switch/test proxy latency from Telegram or CLI
+- **LLM usage** — DeepSeek balance and 百炼 (DashScope) spend/tokens via Telegram or CLI
 - **Xiaodu smart speaker integration** — DLNA playback control, DuerOS TTS/voice commands, alert TTS, online probe, BDUSS health check
 - Optional Google Calendar / Microsoft Outlook repair events for confirmed issues
 - Aligned plain-text status table in console output and alert messages
@@ -166,6 +167,27 @@ Commands are only accepted from `chat_id`s listed in `telegram.recipients`.
 | `/xiaodu_say <text>` | Send voice command (e.g. "现在几点了") |
 | `/xiaodu_probe` | Check Xiaodu DLNA reachability |
 | `/xiaodu_bduss_check` | Validate DuerOS BDUSS credentials |
+| `/llm_usage` or `/ai_usage` | DeepSeek balance + 百炼 spend/token usage (live API) |
+| `/deepseek_balance` | DeepSeek prepaid balance only |
+| `/bailian_usage` | Alibaba 百炼 (DashScope) spend and tokens only |
+
+### LLM usage (DeepSeek & 百炼)
+
+Query prepaid balance and spend via provider APIs (requires `telegram.listen_commands: true` for bot commands).
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `llm_usage.enabled` | `false` | Enable LLM usage queries |
+| `llm_usage.proxy` | — | Optional HTTP proxy for DeepSeek/DashScope API calls |
+| `llm_usage.deepseek.enabled` | `false` | Query DeepSeek `GET /user/balance` |
+| `llm_usage.deepseek.api_key` | — | DeepSeek API key |
+| `llm_usage.bailian.enabled` | `false` | Query DashScope `GET /api/v1/quotas` |
+| `llm_usage.bailian.api_key` | — | DashScope (百炼) API key |
+| `llm_usage.bailian.api_base` | China default | Override for intl region endpoints |
+
+CLI: `llm usage`, `llm deepseek`, `llm bailian`
+
+DeepSeek does not publish a token-spend history API; the integration reports **remaining balance**. 百炼 returns **daily/monthly spend**, **tokens_used**, and optional per-model quota usage from the quotas endpoint.
 
 ### iKuai Router
 

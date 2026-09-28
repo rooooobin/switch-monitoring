@@ -36,7 +36,11 @@ func PrintSubcommandHelp(w io.Writer) {
   switch-monitor xiaodu probe
   switch-monitor xiaodu bduss-check
 
-Requires ikuai / mihomo / xiaodu sections enabled in the config file (same as Telegram).
+  switch-monitor llm usage
+  switch-monitor llm deepseek
+  switch-monitor llm bailian
+
+Requires ikuai / mihomo / xiaodu / llm_usage sections enabled in the config file (same as Telegram).
 Mihomo delay uses latency_test_url and latency_timeout_ms from config when set.
 `)
 }
@@ -223,4 +227,28 @@ func RunMihomo(ctx context.Context, cfg *config.MonitorConfig, args []string) er
 		slog.Error("CLI mihomo: unknown subcommand", "subcommand", args[0])
 		return fmt.Errorf("unknown mihomo subcommand %q", args[0])
 	}
+}
+
+// RunLLM handles: usage | deepseek | bailian
+func RunLLM(ctx context.Context, cfg *config.MonitorConfig, args []string) error {
+	if cfg.LLMUsage == nil || !cfg.LLMUsage.Enabled {
+		return fmt.Errorf("llm_usage is not enabled in config")
+	}
+	if len(args) < 1 {
+		return fmt.Errorf("llm: expected subcommand (usage, deepseek, bailian)")
+	}
+	var scope runner.LLMUsageScope
+	switch args[0] {
+	case "usage":
+		scope = runner.LLMUsageAll
+	case "deepseek":
+		scope = runner.LLMUsageDeepSeekOnly
+	case "bailian":
+		scope = runner.LLMUsageBailianOnly
+	default:
+		return fmt.Errorf("unknown llm subcommand %q", args[0])
+	}
+	report := runner.FetchLLMUsageScoped(ctx, cfg.LLMUsage, scope)
+	fmt.Print(runner.FormatLLMUsagePlainScoped(report, cfg.LLMUsage, scope))
+	return nil
 }

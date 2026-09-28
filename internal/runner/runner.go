@@ -559,6 +559,20 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 					}
 					_ = client.SendMessageHTML(ctx, chatIDStr, resultSb.String())
 				}
+			} else if isLLMUsageCommand(text) {
+				if !r.isAuthorizedTelegramChat(update.Message.Chat.ID) {
+					slog.Warn("Received llm_usage command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID, "command", text)
+					continue
+				}
+				if r.cfg.LLMUsage == nil || !r.cfg.LLMUsage.Enabled {
+					_ = client.SendMessage(ctx, chatIDStr, "⚠️ llm_usage is not enabled in config.")
+					continue
+				}
+				scope := llmUsageScopeForCommand(text)
+				slog.Info("Fetching LLM usage via Telegram", "chat_id", update.Message.Chat.ID, "scope", scope)
+				report := FetchLLMUsageScoped(ctx, r.cfg.LLMUsage, scope)
+				msg := FormatLLMUsageHTMLScoped(report, r.cfg.LLMUsage, scope)
+				_ = client.SendMessageHTML(ctx, chatIDStr, msg)
 			} else if isXiaoduCommand(text) {
 				if !r.isAuthorizedTelegramChat(update.Message.Chat.ID) {
 					slog.Warn("Received xiaodu command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID, "command", text)

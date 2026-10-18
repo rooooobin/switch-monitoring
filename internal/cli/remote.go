@@ -18,9 +18,12 @@ import (
 func PrintSubcommandHelp(w io.Writer) {
 	fmt.Fprint(w, `Local commands (run after global flags such as -config):
 
-  switch-monitor ikuai list-dnat
+	switch-monitor ikuai list-dnat
   switch-monitor ikuai enable-dnat <id>
   switch-monitor ikuai disable-dnat <id>
+  switch-monitor ikuai add-dnat <name> <wan_port> <lan_addr> <lan_port> [proto] [comment...]
+  switch-monitor ikuai edit-dnat <id> [name=<n>] [wan=<p>] [lan=<ip>] [lanport=<p>] [proto=<p>] [comment=<text>]
+  switch-monitor ikuai del-dnat <id> [id...]
 
   switch-monitor mihomo list-proxy
   switch-monitor mihomo set-proxy <outbound-name>
@@ -45,7 +48,8 @@ Mihomo delay uses latency_test_url and latency_timeout_ms from config when set.
 `)
 }
 
-// RunIkuai handles: list-dnat | enable-dnat <id> | disable-dnat <id>
+// RunIkuai handles: list-dnat | enable-dnat <id> | disable-dnat <id> |
+// add-dnat | edit-dnat | del-dnat
 func RunIkuai(_ context.Context, cfg *config.MonitorConfig, args []string) error {
 	if cfg.Ikuai == nil || !cfg.Ikuai.Enabled {
 		slog.Error("CLI ikuai: integration disabled in config")
@@ -53,7 +57,7 @@ func RunIkuai(_ context.Context, cfg *config.MonitorConfig, args []string) error
 	}
 	if len(args) < 1 {
 		slog.Error("CLI ikuai: missing subcommand")
-		return fmt.Errorf("ikuai: expected subcommand (list-dnat, enable-dnat, disable-dnat)")
+		return fmt.Errorf("ikuai: expected subcommand (list-dnat, enable-dnat, disable-dnat, add-dnat, edit-dnat, del-dnat)")
 	}
 	slog.Info("CLI ikuai command", "subcommand", args[0], "args", args[1:], "router_base", cfg.Ikuai.URL)
 
@@ -102,10 +106,138 @@ func RunIkuai(_ context.Context, cfg *config.MonitorConfig, args []string) error
 		slog.Info("CLI ikuai: toggle done", "rule_id", id, "enabled", enable)
 		return nil
 
+	case "add-dnat":
+		if len(args) < 5 {
+			return fmt.Errorf("add-dnat: usage: add-dnat <name> <wan_port> <lan_addr> <lan_port> [proto] [comment...]")
+		}
+		spec, err := dnatSpecFromArgs(args[1:])
+		if err != nil {
+			return fmt.Errorf("add-dnat: %w", err)
+		}
+		id, err := ikuai.CreateDNATRule(spec)
+		if err != nil {
+			slog.Error("CLI ikuai: add-dnat failed", "name", spec.Name, "wan_port", spec.WanPort, "err", err)
+			return err
+		}
+		if id > 0 {
+			fmt.Printf("DNAT rule %d created (%s: %s → %s:%s).\n", id, spec.Protocol, spec.WanPort, spec.LanAddr, spec.LanPort)
+		} else {
+			fmt.Printf("DNAT rule created (%s: %s → %s:%s).\n", spec.Protocol, spec.WanPort, spec.LanAddr, spec.LanPort)
+		}
+		slog.Info("CLI ikuai: add-dnat done", "rule_id", id, "name", spec.Name, "wan_port", spec.WanPort, "lan_addr", spec.LanAddr, "lan_port", spec.LanPort, "protocol", spec.Protocol)
+		return nil
+
+	case "edit-dnat":
+		if len(args) < 3 {
+			return fmt.Errorf("edit-dnat: usage: edit-dnat <id> [name=<n>] [wan=<p>] [lan=<ip>] [lanport=<p>] [proto=<p>] [comment=<text>]")
+		}
+		id, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("invalid rule id %q", args[1])
+		}
+		spec, err := dnatEditSpecFromArgs(args[2:])
+		if err != nil {
+			return fmt.Errorf("edit-dnat: %w", err)
+		}
+		if err := ikuai.UpdateDNATRule(id, spec); err != nil {
+			slog.Error("CLI ikuai: edit-dnat failed", "rule_id", id, "err", err)
+			return err
+		}
+		fmt.Printf("DNAT rule %d updated.\n", id)
+		slog.Info("CLI ikuai: edit-dnat done", "rule_id", id)
+		return nil
+
+	case "del-dnat":
+		if len(args) < 2 {
+			return fmt.Errorf("del-dnat: usage: del-dnat <id> [id...]")
+		}
+		ids := make([]int, 0, len(args)-1)
+		for _, raw := range args[1:] {
+			id, err := strconv.Atoi(strings.TrimPrefix(raw, "#"))
+			if err != nil {
+				return fmt.Errorf("invalid rule id %q", raw)
+			}
+			ids = append(ids, id)
+		}
+		if err := ikuai.DeleteDNATRule(ids...); err != nil {
+			slog.Error("CLI ikuai: del-dnat failed", "rule_ids", ids, "err", err)
+			return err
+		}
+		fmt.Printf("DNAT rule(s) %v deleted.\n", ids)
+		slog.Info("CLI ikuai: del-dnat done", "rule_ids", ids)
+		return nil
+
 	default:
 		slog.Error("CLI ikuai: unknown subcommand", "subcommand", args[0])
 		return fmt.Errorf("unknown ikuai subcommand %q", args[0])
 	}
+}
+
+// dnatSpecFromArgs parses "<name> <wan_port> <lan_addr> <lan_port> [proto] [comment...]".
+// Unlike the Telegram path, CLI values are passed through untouched so the
+// adapter's validation can report exactly what the operator typed.
+func dnatSpecFromArgs(args []string) (adapter.DNATRuleSpec, error) {
+	if len(args) < 4 {
+		return adapter.DNATRuleSpec{}, fmt.Errorf("need <name> <wan_port> <lan_addr> <lan_port>")
+	}
+	spec := adapter.DNATRuleSpec{
+		Name:     args[0],
+		WanPort:  args[1],
+		LanAddr:  args[2],
+		LanPort:  args[3],
+		Protocol: "tcp",
+	}
+	rest := args[4:]
+	if len(rest) > 0 {
+		switch strings.ToLower(rest[0]) {
+		case "tcp", "udp", "tcp+udp", "tcp/udp":
+			spec.Protocol = strings.ToLower(rest[0])
+			rest = rest[1:]
+		}
+	}
+	if len(rest) > 0 {
+		spec.Comment = strings.Join(rest, " ")
+	}
+	return spec, nil
+}
+
+// dnatEditSpecFromArgs parses key=value pairs into a partial spec.
+func dnatEditSpecFromArgs(args []string) (adapter.DNATRuleSpec, error) {
+	var spec adapter.DNATRuleSpec
+	for _, arg := range args {
+		key, value, ok := strings.Cut(arg, "=")
+		if !ok {
+			return spec, fmt.Errorf("expected key=value, got %q", arg)
+		}
+		switch strings.ToLower(key) {
+		case "name", "tagname":
+			spec.Name = value
+		case "wan", "wan_port":
+			spec.WanPort = value
+		case "lan", "lan_addr":
+			spec.LanAddr = value
+		case "lanport", "lan_port":
+			spec.LanPort = value
+		case "proto", "protocol":
+			spec.Protocol = strings.ToLower(value)
+		case "comment":
+			spec.Comment = value
+		case "iface", "interface":
+			spec.Interface = value
+		case "src":
+			if value == "" {
+				spec.SrcAddr = []string{}
+			} else {
+				spec.SrcAddr = strings.Split(value, ",")
+			}
+		case "enabled", "enable":
+			on := value == "" || value == "1" || strings.EqualFold(value, "yes") || strings.EqualFold(value, "true") || strings.EqualFold(value, "on")
+			spec.Enabled = &on
+		default:
+			return spec, fmt.Errorf("unknown field %q", key)
+		}
+	}
+	return spec, nil
 }
 
 // RunMihomo handles: list-proxy | set-proxy <outbound>

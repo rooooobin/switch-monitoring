@@ -67,7 +67,10 @@ telegram:
       chat_id: "987654321"
       proxy: "http://127.0.0.1:7890"
 
-# iKuai Router settings for DNAT rule management via Telegram
+# iKuai Router settings for port-mapping (DNAT) rule management via Telegram / CLI
+# iKuai OS 4.x: 策略中心 → NAT → 端口映射 (3.x: 行为管控 → 端口映射)
+# Telegram: /list_dnat /add_dnat /edit_dnat /del_dnat /enable_dnat /disable_dnat /dnat_help
+# CLI:      ikuai list-dnat | add-dnat | edit-dnat | del-dnat | enable-dnat | disable-dnat
 ikuai:
   enabled: false
   url: "http://192.168.1.1"

@@ -19,7 +19,7 @@ Optional integrations: **iKuai** router DNAT control, **Mihomo** (Clash Meta) pr
 - SMTP email with port-465 SSL and port-587 STARTTLS support
 - Telegram Bot API notifications with optional HTTP proxy support
 - **Telegram command support** — trigger checks and control integrations from your bot
-- **iKuai integration** — list/enable/disable DNAT rules (iKuai 3.x and 4.x API compatible)
+- **iKuai integration** — list/add/edit/delete/enable/disable DNAT port-mapping rules (iKuai 3.x and 4.x API compatible)
 - **Mihomo (Clash Meta) integration** — list/switch/test proxy latency from Telegram or CLI
 - **LLM usage** — DeepSeek balance and 百炼 (DashScope) spend/tokens via Telegram or CLI
 - **Xiaodu smart speaker integration** — DLNA playback control, DuerOS TTS/voice commands, alert TTS, online probe, BDUSS health check
@@ -84,6 +84,9 @@ Run after global flags such as `--config`:
 ```bash
 switch-monitor --config config.yaml ikuai list-dnat
 switch-monitor --config config.yaml ikuai enable-dnat <id>
+switch-monitor --config config.yaml ikuai add-dnat <name> <wan_port> <lan_addr> <lan_port> [tcp|udp|tcp+udp] [comment...]
+switch-monitor --config config.yaml ikuai edit-dnat <id> wan=8080 comment="new comment"
+switch-monitor --config config.yaml ikuai del-dnat <id> [id...]
 switch-monitor --config config.yaml mihomo list-proxy
 switch-monitor --config config.yaml mihomo set-proxy <name>
 switch-monitor --config config.yaml xiaodu status
@@ -153,8 +156,12 @@ Commands are only accepted from `chat_id`s listed in `telegram.recipients`.
 | Command | Description |
 |---------|-------------|
 | `/check` | Force an immediate poll of all switches |
-| `/list_dnat` | List iKuai DNAT rules |
-| `/enable_dnat <id>` / `/disable_dnat <id>` | Toggle an iKuai DNAT rule |
+| `/list_dnat` | List iKuai port-mapping (DNAT) rules |
+| `/enable_dnat <id>` / `/disable_dnat <id>` | Toggle an iKuai DNAT rule (multiple ids allowed) |
+| `/add_dnat <name> <wan_port> <lan_addr> <lan_port> [proto] [comment...]` | Create a port-mapping rule; `proto` defaults to `tcp` |
+| `/edit_dnat <id> [name=] [wan=] [lan=] [lanport=] [proto=] [comment=]` | Change only the fields you pass |
+| `/del_dnat <id> [id...]` | Ask to delete rule(s); confirm with `/del_dnat_confirm <id> ...` |
+| `/dnat_help` | Show iKuai command syntax |
 | `/list_proxy` | List Mihomo selector outbounds |
 | `/set_proxy <name>` | Switch Mihomo selector to `<name>` |
 | `/delay_proxy <name>` | Test proxy latency (ms) |
@@ -170,6 +177,41 @@ Commands are only accepted from `chat_id`s listed in `telegram.recipients`.
 | `/llm_usage` or `/ai_usage` | DeepSeek balance + 百炼 spend/token usage (live API) |
 | `/deepseek_balance` | DeepSeek prepaid balance only |
 | `/bailian_usage` | Alibaba 百炼 (DashScope) spend and tokens only |
+
+The bot also registers these commands automatically on startup (`setMyCommands`), so typing `/`
+in the chat shows the menu. To set it once by hand with BotFather, use `/setcommands` and paste:
+
+```text
+check - Force an immediate poll of all switches
+list_dnat - List iKuai port mapping rules
+add_dnat - Add iKuai port mapping (use: /add_dnat <name> <wan_port> <lan_addr> <lan_port> [tcp|udp|tcp+udp] [comment])
+edit_dnat - Edit iKuai port mapping (use: /edit_dnat <id> wan=8080 comment=new comment)
+del_dnat - Delete iKuai port mapping (use: /del_dnat <id> [id...])
+del_dnat_confirm - Confirm deletion requested by /del_dnat
+dnat_help - Show iKuai port mapping command usage
+enable_dnat - Enable an iKuai port mapping rule (use: /enable_dnat <id>)
+disable_dnat - Disable an iKuai port mapping rule (use: /disable_dnat <id>)
+list_proxy - List Mihomo selector outbounds
+set_proxy - Switch Mihomo selector (use: /set_proxy <name>)
+delay_proxy - Test proxy latency in ms (use: /delay_proxy <name>)
+xiaodu_status - Xiaodu speaker status (volume, playback, DuerOS config)
+xiaodu_volume - Set Xiaodu volume (use: /xiaodu_volume <0-100>)
+xiaodu_mute - Mute Xiaodu speaker
+xiaodu_unmute - Unmute Xiaodu speaker
+xiaodu_play - Play audio URL via DLNA (use: /xiaodu_play <url>)
+xiaodu_stop - Stop playback
+xiaodu_pause - Pause playback
+xiaodu_tts - Speak text via DuerOS TTS (use: /xiaodu_tts <text>)
+xiaodu_say - Send voice command (e.g. "现在几点了")
+xiaodu_probe - Check Xiaodu DLNA reachability
+xiaodu_bduss_check - Validate DuerOS BDUSS credentials
+llm_usage - Show DeepSeek + 百炼 usage
+deepseek_balance - Show DeepSeek balance only
+bailian_usage - Show Bailian usage only
+```
+
+The menu is defined once in `internal/runner/bot_commands.go`, so the listing above and the API
+registration cannot drift apart.
 
 ### LLM usage (DeepSeek & 百炼)
 
@@ -211,7 +253,9 @@ Or paste a fresh `Cookie:` from DevTools on the Token Plan page into `console_co
 
 ### iKuai Router
 
-Manage port-forward (DNAT) rules on an iKuai router. Compatible with iKuai 3.x and 4.x `/Action/call` APIs.
+Manage port-forwarding / port-mapping (DNAT) rules on an iKuai router.
+It works with iKuai 3.x and 4.x through the same `/Action/call` API (`func_name: dnat`).
+On iKuai OS 4.x the rules live under **策略中心 → NAT → 端口映射**.
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -220,7 +264,23 @@ Manage port-forward (DNAT) rules on an iKuai router. Compatible with iKuai 3.x a
 | `ikuai.username` | — | Web admin username |
 | `ikuai.password` | — | Web admin password |
 
-CLI: `ikuai list-dnat`, `ikuai enable-dnat <id>`, `ikuai disable-dnat <id>`
+CLI: `ikuai list-dnat`, `ikuai enable-dnat <id>`, `ikuai disable-dnat <id>`,
+`ikuai add-dnat <name> <wan_port> <lan_addr> <lan_port> [proto] [comment...]`,
+`ikuai edit-dnat <id> [name=] [wan=] [lan=] [lanport=] [proto=] [comment=]`, `ikuai del-dnat <id> [id...]`
+
+Port fields accept a single port (`8080`), an inclusive range (`8000-8010`) or a comma-separated list
+(`8080,8081`); WAN and LAN specs must cover the same number of ports or the router rejects them.
+
+iKuai's own limits (verified against 4.0.x):
+
+- Rule name ≤ 15 characters, must start with a letter/digit/CJK and may only contain letters, digits,
+  CJK, `-` and `_`. Spaces and dots are rejected; the Telegram handler replaces them (spaces become `-`)
+  so a chat message does not fail on the name.
+- Comment ≤ 64 characters, may contain spaces (the adapter applies iKuai's percent-encoding) but must not
+  start with `-` or `_`.
+- Protocol must be `tcp`, `udp` or `tcp+udp`; `interface` defaults to `all`.
+- Invalid input is validated locally, so a typo produces a readable message instead of
+  `3001 请求参数不合法`. Router-side errors (e.g. `端口冲突`) are passed through unchanged.
 
 ### Mihomo (Clash Meta)
 

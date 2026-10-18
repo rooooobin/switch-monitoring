@@ -276,13 +276,17 @@ func FormatDNATRulesTable(rules []adapter.DNATRule) string {
 	}
 
 	type dnatRow struct {
-		id, status, proto, wan, lan, comment string
+		id, status, name, proto, wan, lan, comment string
 	}
 	rows := make([]dnatRow, 0, len(rules))
 	for _, rule := range rules {
 		st := "OFF"
 		if rule.Enabled() == "yes" {
 			st = "ON"
+		}
+		name := rule.Tagname()
+		if name == "" {
+			name = "-"
 		}
 		proto := rule.String("protocol")
 		if proto == "" {
@@ -307,21 +311,22 @@ func FormatDNATRulesTable(rules []adapter.DNATRule) string {
 		}
 		com := rule.Comment()
 		if com == "" {
-			com = "(no comment)"
+			com = "-"
 		}
-		com = truncateDisp(com, 56)
 		rows = append(rows, dnatRow{
 			id:      fmt.Sprintf("%d", rule.ID()),
 			status:  st,
+			name:    truncateDisp(name, adapter.DNATMaxTagnameLen),
 			proto:   proto,
 			wan:     wan,
 			lan:     lan,
-			comment: com,
+			comment: truncateDisp(com, 32),
 		})
 	}
 
 	colID := dispWidth("ID")
 	colStatus := dispWidth("Status")
+	colName := dispWidth("Name")
 	colProto := dispWidth("Proto")
 	colWan := dispWidth("WAN")
 	colLan := dispWidth("LAN")
@@ -332,6 +337,9 @@ func FormatDNATRulesTable(rules []adapter.DNATRule) string {
 		}
 		if w := dispWidth(r.status); w > colStatus {
 			colStatus = w
+		}
+		if w := dispWidth(r.name); w > colName {
+			colName = w
 		}
 		if w := dispWidth(r.proto); w > colProto {
 			colProto = w
@@ -347,17 +355,18 @@ func FormatDNATRulesTable(rules []adapter.DNATRule) string {
 		}
 	}
 
-	sep := makeSepDNAT(colID, colStatus, colProto, colWan, colLan, colComment)
+	sep := makeSepDNAT(colID, colStatus, colName, colProto, colWan, colLan, colComment)
 
 	var sb strings.Builder
 	sb.WriteString(sep + "\n")
-	sb.WriteString(makeHeadDNAT(colID, colStatus, colProto, colWan, colLan, colComment) + "\n")
+	sb.WriteString(makeHeadDNAT(colID, colStatus, colName, colProto, colWan, colLan, colComment) + "\n")
 	sb.WriteString(sep + "\n")
 
 	for _, r := range rows {
 		parts := []string{
 			" " + padDisp(r.id, colID) + " ",
 			" " + padDisp(r.status, colStatus) + " ",
+			" " + padDisp(r.name, colName) + " ",
 			" " + padDisp(r.proto, colProto) + " ",
 			" " + padDisp(r.wan, colWan) + " ",
 			" " + padDisp(r.lan, colLan) + " ",
@@ -391,10 +400,11 @@ func FormatXiaoduStatus(st *adapter.XiaoduStatus) string {
 	)
 }
 
-func makeSepDNAT(colID, colStatus, colProto, colWan, colLan, colComment int) string {
+func makeSepDNAT(colID, colStatus, colName, colProto, colWan, colLan, colComment int) string {
 	parts := []string{
 		strings.Repeat("-", colID+2),
 		strings.Repeat("-", colStatus+2),
+		strings.Repeat("-", colName+2),
 		strings.Repeat("-", colProto+2),
 		strings.Repeat("-", colWan+2),
 		strings.Repeat("-", colLan+2),
@@ -403,10 +413,11 @@ func makeSepDNAT(colID, colStatus, colProto, colWan, colLan, colComment int) str
 	return "+" + strings.Join(parts, "+") + "+"
 }
 
-func makeHeadDNAT(colID, colStatus, colProto, colWan, colLan, colComment int) string {
+func makeHeadDNAT(colID, colStatus, colName, colProto, colWan, colLan, colComment int) string {
 	parts := []string{
 		" " + padDisp("ID", colID) + " ",
 		" " + padDisp("Status", colStatus) + " ",
+		" " + padDisp("Name", colName) + " ",
 		" " + padDisp("Proto", colProto) + " ",
 		" " + padDisp("WAN", colWan) + " ",
 		" " + padDisp("LAN", colLan) + " ",

@@ -48,17 +48,21 @@ type Runner struct {
 	cfgModTime   time.Time
 	triggerChan  chan struct{}
 	health       xiaoduHealthState
+	// pendingDNATDeletes holds /del_dnat targets awaiting /del_dnat_confirm,
+	// keyed by Telegram chat ID.
+	pendingDNATDeletes map[int64][]int
 }
 
 // New creates a Runner from the given config.
 func New(cfg *config.MonitorConfig, cfgPath string, noEmail, noCalendar bool) *Runner {
 	r := &Runner{
-		cfg:         cfg,
-		cfgPath:     cfgPath,
-		noEmail:     noEmail,
-		noCalendar:  noCalendar,
-		checker:     checker.New(cfg.MinSpeedMbps),
-		triggerChan: make(chan struct{}, 1),
+		cfg:                cfg,
+		cfgPath:            cfgPath,
+		noEmail:            noEmail,
+		noCalendar:         noCalendar,
+		checker:            checker.New(cfg.MinSpeedMbps),
+		triggerChan:        make(chan struct{}, 1),
+		pendingDNATDeletes: make(map[int64][]int),
 	}
 	r.applyConfig(cfg)
 	return r
@@ -316,6 +320,7 @@ func (r *Runner) RunLoop(once bool) {
 	// Start telegram polling in the background if enabled
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	r.syncTelegramCommands(ctx)
 	go r.pollTelegramCommands(ctx)
 	go r.runXiaoduHealthLoop(ctx)
 
@@ -405,69 +410,16 @@ func (r *Runner) pollTelegramCommands(ctx context.Context) {
 					_ = client.SendMessage(ctx, chatIDStr, "🔄 Manual check triggered...")
 				default:
 				}
-			} else if strings.HasPrefix(text, "/list_dnat") || strings.HasPrefix(text, "/enable_dnat") || strings.HasPrefix(text, "/disable_dnat") {
+			} else if isIkuaiCommand(text) {
 				if !r.isAuthorizedTelegramChat(update.Message.Chat.ID) {
 					slog.Warn("Received iKuai command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID, "command", text)
 					continue
 				}
-
-				if r.cfg.Ikuai == nil || !r.cfg.Ikuai.Enabled {
-					_ = client.SendMessage(ctx, chatIDStr, "⚠️ iKuai integration is not enabled in config.")
+				if strings.HasPrefix(text, "/del_dnat_confirm") {
+					r.handleDNATDeleteConfirmation(ctx, client, chatIDStr, text, update.Message.Chat.ID)
 					continue
 				}
-
-				ikuai, err := adapter.NewIkuaiClient(r.cfg.Ikuai.URL, r.cfg.Ikuai.Username, r.cfg.Ikuai.Password)
-				if err != nil {
-					_ = client.SendMessage(ctx, chatIDStr, "❌ Failed to init iKuai client: "+err.Error())
-					continue
-				}
-
-				if err := ikuai.Login(); err != nil {
-					_ = client.SendMessage(ctx, chatIDStr, "❌ iKuai login failed: "+err.Error())
-					continue
-				}
-
-				if strings.HasPrefix(text, "/list_dnat") {
-					rules, err := ikuai.GetDNATRules()
-					if err != nil {
-						_ = client.SendMessage(ctx, chatIDStr, "❌ Failed to fetch DNAT rules: "+err.Error())
-						continue
-					}
-
-					table := FormatDNATRulesTable(rules)
-					msg := "📋 <b>iKuai DNAT Rules</b>\n<pre>" + html.EscapeString(table) + "</pre>"
-					_ = client.SendMessageHTML(ctx, chatIDStr, msg)
-
-				} else {
-					parts := strings.Fields(text)
-					if len(parts) < 2 {
-						_ = client.SendMessage(ctx, chatIDStr, "⚠️ Usage: /enable_dnat <id> or /disable_dnat <id>")
-						continue
-					}
-					id, err := strconv.Atoi(parts[1])
-					if err != nil {
-						_ = client.SendMessage(ctx, chatIDStr, "❌ Invalid ID: "+parts[1])
-						continue
-					}
-
-					enable := strings.HasPrefix(text, "/enable_dnat")
-					action := "disabling"
-					if enable {
-						action = "enabling"
-					}
-
-					if err := ikuai.ToggleDNATRule(id, enable); err != nil {
-						slog.Error("Failed to toggle iKuai DNAT rule via Telegram", "chat_id", update.Message.Chat.ID, "rule_id", id, "enable", enable, "error", err)
-						_ = client.SendMessage(ctx, chatIDStr, fmt.Sprintf("❌ Error %s rule %d: %v", action, id, err))
-					} else {
-						status := "disabled"
-						if enable {
-							status = "enabled"
-						}
-						slog.Info("Successfully toggled iKuai DNAT rule via Telegram", "chat_id", update.Message.Chat.ID, "rule_id", id, "status", status)
-						_ = client.SendMessage(ctx, chatIDStr, fmt.Sprintf("✅ Rule %d has been %s.", id, status))
-					}
-				}
+				r.handleIkuaiTelegram(ctx, client, chatIDStr, text, update.Message.Chat.ID)
 			} else if strings.HasPrefix(text, "/list_proxy") || strings.HasPrefix(text, "/set_proxy") || strings.HasPrefix(text, "/delay_proxy") {
 				if !r.isAuthorizedTelegramChat(update.Message.Chat.ID) {
 					slog.Warn("Received mihomo command from unauthorized telegram chat", "chat_id", update.Message.Chat.ID, "command", text)

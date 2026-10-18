@@ -107,6 +107,56 @@ type getUpdatesResponse struct {
 	Result []Update `json:"result"`
 }
 
+// BotCommand is one entry of the Telegram command menu.
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+// SetMyCommands registers the bot's command menu (the list shown after typing
+// "/" in a chat). It replaces the previous list, so pass the full menu.
+func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error {
+	urlStr := fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", c.token)
+
+	payload := map[string]interface{}{
+		"commands": commands,
+		"scope":    map[string]string{"type": "default"},
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", urlStr, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("telegram setMyCommands returned status: %s, body: %s", resp.Status, string(body))
+	}
+
+	var parsed struct {
+		Ok          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return err
+	}
+	if !parsed.Ok {
+		return fmt.Errorf("telegram setMyCommands returned ok=false: %s", parsed.Description)
+	}
+	return nil
+}
+
 // GetUpdates fetches updates using long-polling.
 func (c *Client) GetUpdates(ctx context.Context, offset int) ([]Update, error) {
 	urlStr := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=30", c.token, offset)

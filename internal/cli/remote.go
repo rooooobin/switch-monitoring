@@ -38,6 +38,11 @@ func PrintSubcommandHelp(w io.Writer) {
   switch-monitor xiaodu say <text>
   switch-monitor xiaodu probe
   switch-monitor xiaodu bduss-check
+  switch-monitor xiaodu discover
+  switch-monitor xiaodu skill-serve
+  switch-monitor xiaodu skill-test <text>
+  switch-monitor xiaodu skill-chat
+  switch-monitor xiaodu codebuddy-models
 
   switch-monitor llm usage
   switch-monitor llm deepseek

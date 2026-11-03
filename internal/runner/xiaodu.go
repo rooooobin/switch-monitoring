@@ -31,14 +31,28 @@ func (r *Runner) handleXiaoduTelegram(ctx context.Context, client *telegram.Clie
 		_ = client.SendMessage(ctx, chatIDStr, "⚠️ Xiaodu integration is not enabled in config.")
 		return
 	}
-	if strings.TrimSpace(r.cfg.Xiaodu.IP) == "" {
+	if strings.TrimSpace(r.cfg.Xiaodu.IP) == "" && !r.cfg.Xiaodu.AutoDiscoverIPOrDefault() {
 		_ = client.SendMessage(ctx, chatIDStr, "⚠️ Xiaodu ip is not configured.")
 		return
 	}
 
-	c := newXiaoduClient(r.cfg.Xiaodu)
+	c, err := XiaoduClientFor(ctx, r.cfg.Xiaodu)
+	if err != nil {
+		_ = client.SendMessage(ctx, chatIDStr, "❌ Cannot resolve Xiaodu speaker: "+err.Error())
+		return
+	}
 
 	switch {
+	case text == "/xiaodu_discover":
+		dev, err := DiscoverXiaoduNow(ctx, r.cfg.Xiaodu)
+		if err != nil {
+			_ = client.SendMessage(ctx, chatIDStr, "❌ Discovery failed: "+err.Error())
+			return
+		}
+		msg := "🔎 <b>Xiaodu Discovery</b>\n<pre>" +
+			html.EscapeString(FormatXiaoduDevice(dev, r.cfg.Xiaodu.IP)) + "</pre>"
+		_ = client.SendMessageHTML(ctx, chatIDStr, msg)
+
 	case text == "/xiaodu_status" || strings.HasPrefix(text, "/xiaodu_status "):
 		st, err := c.GetStatus(ctx)
 		if err != nil {
@@ -149,7 +163,23 @@ func (r *Runner) handleXiaoduTelegram(ctx context.Context, client *telegram.Clie
 		}
 		_ = client.SendMessage(ctx, chatIDStr, "✅ DuerOS BDUSS is valid.")
 
+	case text == "/xiaodu_skill_status":
+		if r.cfg.Xiaodu.Skill == nil || !r.cfg.Xiaodu.Skill.Enabled {
+			_ = client.SendMessage(ctx, chatIDStr, "ℹ️ DuerOS AI skill webhook is disabled in config (xiaodu.skill.enabled).")
+			return
+		}
+		srv := r.skillServer
+		if srv == nil {
+			_ = client.SendMessage(ctx, chatIDStr, "⚠️ Skill webhook is configured but not running (needs the monitor loop, not --once).")
+			return
+		}
+		msg := "🧠 <b>Xiaodu AI Skill</b>\n<pre>" + html.EscapeString(fmt.Sprintf(
+			"Listen:   %s%s\nProvider: %s\nModel:    %s\nSessions: %d\nVerify:   %v",
+			srv.cfg.ListenOrDefault(), srv.cfg.PathOrDefault(), srv.Provider(), srv.Model(),
+			srv.SessionCount(), srv.cfg.VerifySignatureOrDefault())) + "</pre>"
+		_ = client.SendMessageHTML(ctx, chatIDStr, msg)
+
 	default:
-		_ = client.SendMessage(ctx, chatIDStr, "⚠️ Unknown Xiaodu command. Try /xiaodu_status, /xiaodu_volume, /xiaodu_tts, /xiaodu_say, /xiaodu_play, /xiaodu_stop, /xiaodu_pause, /xiaodu_mute, /xiaodu_unmute, /xiaodu_probe, /xiaodu_bduss_check")
+		_ = client.SendMessage(ctx, chatIDStr, "⚠️ Unknown Xiaodu command. Try /xiaodu_status, /xiaodu_discover, /xiaodu_volume, /xiaodu_tts, /xiaodu_say, /xiaodu_play, /xiaodu_stop, /xiaodu_pause, /xiaodu_mute, /xiaodu_unmute, /xiaodu_probe, /xiaodu_bduss_check")
 	}
 }

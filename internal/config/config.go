@@ -98,9 +98,15 @@ type XiaoduConfig struct {
 	BDUSS    string `yaml:"bduss"`
 	SceneID  string `yaml:"scene_id"`
 
-	AlertTTS    *XiaoduAlertTTSConfig    `yaml:"alert_tts"`
-	Probe       *XiaoduProbeConfig       `yaml:"probe"`
-	BDUSSCheck  *XiaoduBDUSSCheckConfig  `yaml:"bduss_check"`
+	// AutoDiscoverIP resolves the speaker's LAN address from the cloud device list
+	// instead of trusting IP, which DHCP moves between reboots. Requires BDUSS.
+	// Defaults to true; nil means "not set".
+	AutoDiscoverIP *bool `yaml:"auto_discover_ip"`
+
+	AlertTTS   *XiaoduAlertTTSConfig   `yaml:"alert_tts"`
+	Probe      *XiaoduProbeConfig      `yaml:"probe"`
+	BDUSSCheck *XiaoduBDUSSCheckConfig `yaml:"bduss_check"`
+	Skill      *XiaoduSkillConfig      `yaml:"skill"`
 }
 
 // PortOrDefault returns the DLNA port, defaulting to 49494.
@@ -231,14 +237,15 @@ type rawYAML struct {
 		Password string `yaml:"password"`
 	} `yaml:"ikuai"`
 	Xiaodu *struct {
-		Enabled  bool   `yaml:"enabled"`
-		IP       string `yaml:"ip"`
-		Port     int    `yaml:"port"`
-		ClientID string `yaml:"client_id"`
-		CUID     string `yaml:"cuid"`
-		BDUSS    string `yaml:"bduss"`
-		SceneID  string `yaml:"scene_id"`
-		AlertTTS *struct {
+		Enabled        bool   `yaml:"enabled"`
+		IP             string `yaml:"ip"`
+		Port           int    `yaml:"port"`
+		ClientID       string `yaml:"client_id"`
+		CUID           string `yaml:"cuid"`
+		BDUSS          string `yaml:"bduss"`
+		SceneID        string `yaml:"scene_id"`
+		AutoDiscoverIP *bool  `yaml:"auto_discover_ip"`
+		AlertTTS       *struct {
 			Mode      string `yaml:"mode"`
 			StartTime string `yaml:"start_time"`
 			EndTime   string `yaml:"end_time"`
@@ -255,6 +262,31 @@ type rawYAML struct {
 			IntervalSeconds int  `yaml:"interval_seconds"`
 			NotifyTelegram  bool `yaml:"notify_telegram"`
 		} `yaml:"bduss_check"`
+		Skill *struct {
+			Enabled                   bool     `yaml:"enabled"`
+			Listen                    string   `yaml:"listen"`
+			Path                      string   `yaml:"path"`
+			VerifySignature           *bool    `yaml:"verify_signature"`
+			AllowedSkillIDs           []string `yaml:"allowed_skill_ids"`
+			Provider                  string   `yaml:"provider"`
+			LLMBaseURL                string   `yaml:"llm_base_url"`
+			LLMAPIKey                 string   `yaml:"llm_api_key"`
+			LLMModel                  string   `yaml:"llm_model"`
+			LLMProxy                  string   `yaml:"llm_proxy"`
+			LLMTimeoutSeconds         int      `yaml:"llm_timeout_seconds"`
+			SystemPrompt              string   `yaml:"system_prompt"`
+			MaxTokens                 int      `yaml:"max_tokens"`
+			Temperature               *float64 `yaml:"temperature"`
+			MaxReplyChars             int      `yaml:"max_reply_chars"`
+			HistoryMessages           int      `yaml:"history_messages"`
+			SessionTTLSeconds         int      `yaml:"session_ttl_seconds"`
+			Greeting                  string   `yaml:"greeting"`
+			Farewell                  string   `yaml:"farewell"`
+			ExitKeywords              []string `yaml:"exit_keywords"`
+			NotifyTelegram            bool     `yaml:"notify_telegram"`
+			CodeBuddyTokenFile        string   `yaml:"codebuddy_token_file"`
+			CodeBuddyRefreshTokenFile string   `yaml:"codebuddy_refresh_token_file"`
+		} `yaml:"skill"`
 	} `yaml:"xiaodu"`
 	Mihomo *struct {
 		Enabled   bool   `yaml:"enabled"`
@@ -445,13 +477,14 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 
 	if raw.Xiaodu != nil {
 		x := &XiaoduConfig{
-			Enabled:  raw.Xiaodu.Enabled,
-			IP:       strings.TrimSpace(raw.Xiaodu.IP),
-			Port:     raw.Xiaodu.Port,
-			ClientID: strings.TrimSpace(raw.Xiaodu.ClientID),
-			CUID:     strings.TrimSpace(raw.Xiaodu.CUID),
-			BDUSS:    strings.TrimSpace(raw.Xiaodu.BDUSS),
-			SceneID:  strings.TrimSpace(raw.Xiaodu.SceneID),
+			Enabled:        raw.Xiaodu.Enabled,
+			IP:             strings.TrimSpace(raw.Xiaodu.IP),
+			Port:           raw.Xiaodu.Port,
+			ClientID:       strings.TrimSpace(raw.Xiaodu.ClientID),
+			CUID:           strings.TrimSpace(raw.Xiaodu.CUID),
+			BDUSS:          strings.TrimSpace(raw.Xiaodu.BDUSS),
+			SceneID:        strings.TrimSpace(raw.Xiaodu.SceneID),
+			AutoDiscoverIP: raw.Xiaodu.AutoDiscoverIP,
 		}
 		if raw.Xiaodu.AlertTTS != nil {
 			x.AlertTTS = &XiaoduAlertTTSConfig{
@@ -474,6 +507,34 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 				Enabled:         raw.Xiaodu.BDUSSCheck.Enabled,
 				IntervalSeconds: raw.Xiaodu.BDUSSCheck.IntervalSeconds,
 				NotifyTelegram:  raw.Xiaodu.BDUSSCheck.NotifyTelegram,
+			}
+		}
+		if raw.Xiaodu.Skill != nil {
+			s := raw.Xiaodu.Skill
+			x.Skill = &XiaoduSkillConfig{
+				Enabled:                   s.Enabled,
+				Listen:                    strings.TrimSpace(s.Listen),
+				Path:                      strings.TrimSpace(s.Path),
+				VerifySignature:           s.VerifySignature,
+				AllowedSkillIDs:           trimStringSlice(s.AllowedSkillIDs),
+				Provider:                  strings.ToLower(strings.TrimSpace(s.Provider)),
+				LLMBaseURL:                strings.TrimSpace(s.LLMBaseURL),
+				LLMAPIKey:                 strings.TrimSpace(s.LLMAPIKey),
+				LLMModel:                  strings.TrimSpace(s.LLMModel),
+				LLMProxy:                  strings.TrimSpace(s.LLMProxy),
+				LLMTimeoutSeconds:         s.LLMTimeoutSeconds,
+				SystemPrompt:              strings.TrimSpace(s.SystemPrompt),
+				MaxTokens:                 s.MaxTokens,
+				Temperature:               s.Temperature,
+				MaxReplyChars:             s.MaxReplyChars,
+				HistoryMessages:           s.HistoryMessages,
+				SessionTTLSeconds:         s.SessionTTLSeconds,
+				Greeting:                  strings.TrimSpace(s.Greeting),
+				Farewell:                  strings.TrimSpace(s.Farewell),
+				ExitKeywords:              trimStringSlice(s.ExitKeywords),
+				NotifyTelegram:            s.NotifyTelegram,
+				CodeBuddyTokenFile:        strings.TrimSpace(s.CodeBuddyTokenFile),
+				CodeBuddyRefreshTokenFile: strings.TrimSpace(s.CodeBuddyRefreshTokenFile),
 			}
 		}
 		cfg.Xiaodu = x

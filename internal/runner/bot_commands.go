@@ -38,6 +38,8 @@ func TelegramCommands() []telegram.BotCommand {
 		{Command: "xiaodu_tts", Description: "Speak text via DuerOS TTS (use: /xiaodu_tts <text>)"},
 		{Command: "xiaodu_say", Description: "Send voice command (e.g. \"现在几点了\")"},
 		{Command: "xiaodu_probe", Description: "Check Xiaodu DLNA reachability"},
+		{Command: "xiaodu_discover", Description: "Resolve the Xiaodu speaker's current LAN IP from the cloud"},
+		{Command: "xiaodu_skill_status", Description: "Show DuerOS AI skill webhook status"},
 		{Command: "xiaodu_bduss_check", Description: "Validate DuerOS BDUSS credentials"},
 		{Command: "llm_usage", Description: "Show DeepSeek + 百炼 usage"},
 		{Command: "deepseek_balance", Description: "Show DeepSeek balance only"},

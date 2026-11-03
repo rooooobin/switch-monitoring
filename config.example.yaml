@@ -2,8 +2,9 @@
 # Copy to config.yaml and adjust credentials and paths.
 
 # Switches to monitor
-# If you see "Could not detect switch model": swap admin_url so each type hits the
-# right device. curl http://IP — Netgear shows "NETGEAR ProSAFE Plus Switch".
+# If you see "Could not detect switch model": swap admin_url so each
+# type hits the right device. curl http://IP — Netgear shows
+# "NETGEAR ProSAFE Plus Switch".
 switches:
   # Mercury SG108 Pro (username/password). Use the IP that shows Mercury login.
   - name: mercury-sg108
@@ -18,7 +19,8 @@ switches:
       2: Server
       3: AP Upstairs
 
-  # Netgear GS108EV3 (password only). Use the IP that shows "GS108Ev3" / Netgear login.
+  # Netgear GS108EV3 (password only). Use the IP that shows
+  # "GS108Ev3" / Netgear login.
   - name: netgear-gs108
     type: netgear_gs108ev3
     admin_url: http://192.168.1.11
@@ -44,7 +46,8 @@ recheck_interval_seconds: 5
 
 # SMTP settings for sending alert emails
 # Port 465 = SSL (e.g. smtp.qq.com); port 587 = STARTTLS.
-# When smtp_user is set, the From address is the same as smtp_user (required by QQ and many providers).
+# When smtp_user is set, the From address is the same as smtp_user
+# (required by QQ and many providers).
 smtp:
   enabled: true
   smtp_host: smtp.example.com
@@ -57,7 +60,8 @@ smtp:
 # Telegram bot notifications (multiple bots/chats supported)
 telegram:
   enabled: false
-  # If true, the program will long-poll Telegram for commands (e.g., /check) from configured recipients.
+  # If true, the program will long-poll Telegram for commands
+  # (e.g., /check) from configured recipients.
   listen_commands: false
   recipients:
     - token: "111111111:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -67,19 +71,24 @@ telegram:
       chat_id: "987654321"
       proxy: "http://127.0.0.1:7890"
 
-# iKuai Router settings for port-mapping (DNAT) rule management via Telegram / CLI
+# iKuai Router settings for port-mapping (DNAT) rule management
+# via Telegram / CLI
 # iKuai OS 4.x: 策略中心 → NAT → 端口映射 (3.x: 行为管控 → 端口映射)
-# Telegram: /list_dnat /add_dnat /edit_dnat /del_dnat /enable_dnat /disable_dnat /dnat_help
-# CLI:      ikuai list-dnat | add-dnat | edit-dnat | del-dnat | enable-dnat | disable-dnat
+# Telegram: /list_dnat /add_dnat /edit_dnat /del_dnat
+#             /enable_dnat /disable_dnat /dnat_help
+# CLI:      ikuai list-dnat | add-dnat | edit-dnat | del-dnat
+#             | enable-dnat | disable-dnat
 ikuai:
   enabled: false
   url: "http://192.168.1.1"
   username: "admin"
   password: "your_password"
 
-# Xiaodu smart speaker — Telegram: /xiaodu_status, /xiaodu_tts, /xiaodu_probe, ...
+# Xiaodu smart speaker — Telegram: /xiaodu_status, /xiaodu_tts,
+#   /xiaodu_probe, ...
 # CLI: xiaodu status | tts | say | probe | bduss-check | ...
-# DLNA control works with ip/port only; DuerOS cloud fields enable native TTS and voice commands.
+# DLNA control works with ip/port only; DuerOS cloud fields enable
+# native TTS and voice commands.
 xiaodu:
   enabled: false
   ip: "192.168.1.162"
@@ -88,8 +97,15 @@ xiaodu:
   cuid: ""
   bduss: ""
   scene_id: ""
+  # Resolve the speaker's LAN address from the cloud device list
+  # instead of trusting `ip` above. The address is DHCP-assigned and
+  # moves between reboots, which silently breaks DLNA and TTS.
+  # Requires bduss; matches the device by cuid, and falls back to `ip`
+  # if the lookup fails. Default: true.
+  auto_discover_ip: true
   # Alert TTS when confirmed port issues are sent (email/Telegram alert).
-  # mode: off (disabled) | always (any time) | window (only between start_time and end_time)
+  # mode: off (disabled) | always (any time) | window (only
+  #   between start_time and end_time)
   alert_tts:
     mode: off
     start_time: "08:00"
@@ -106,15 +122,71 @@ xiaodu:
     enabled: false
     interval_seconds: 86400
     notify_telegram: true
+  # AI skill: a DuerOS custom-skill webhook that bridges voice
+  # queries on the speaker to your LLM. Say "小度小度，打开<调用名>"
+  # and talk to your own model instead of the built-in assistant.
+  # See README → "Xiaodu AI Skill" / "CodeBuddy provider".
+  skill:
+    enabled: false
+    listen: ":9528"          # address the webhook binds to
+    path: "/dueros"          # path DuerOS posts to
+    # Verifies the RSA-SHA1 signature DuerOS puts on every request. Keep this on
+    # for any endpoint reachable from the internet; turn it off only for a local
+    # curl smoke test.
+    verify_signature: true
+    # Optional: pin the webhook to your own skill's applicationId (botId), so a
+    # leaked URL cannot be driven by somebody else's skill.
+    allowed_skill_ids: []
+    # Backend dialect: openai | codebuddy
+    #   openai    — any OpenAI-compatible /chat/completions service
+    #   codebuddy — Tencent CodeBuddy subscription (streaming-only gateway).
+    #               Run `xiaodu codebuddy-models` to list available models.
+    # This daemon has NO implicit credential path: nothing is read from $HOME
+    # or from any other tool's store, and nothing is ever written to disk.
+    provider: "openai"
+    # OpenAI-compatible backend (DeepSeek, 百炼/DashScope, Ollama, ...).
+    # Ignored for provider=codebuddy (defaults to copilot.tencent.com).
+    llm_base_url: "https://api.deepseek.com"
+    # API key / bearer token. For codebuddy this accepts ck_... or a static
+    # access token. When set, no token file is read.
+    llm_api_key: ""
+    # CodeBuddy only: explicit credential files (use ABSOLUTE paths under a
+    # systemd unit). Plain text or {"access","refresh","expires"} JSON.
+    # The daemon reads them but NEVER rewrites them; a rotated token stays in
+    # memory until restart. chmod 600 and keep outside the repo.
+    codebuddy_token_file: ""
+    codebuddy_refresh_token_file: ""
+    # For provider=codebuddy this defaults to deepseek-v4.1-flash.
+    llm_model: "deepseek-chat"
+    llm_proxy: ""             # optional HTTP proxy, e.g. http://127.0.0.1:7890
+    llm_timeout_seconds: 60
+    # Replies are read aloud, so keep the prompt voice-oriented and
+    # the answer short.
+    system_prompt: ""
+    max_tokens: 0             # 0 = provider default
+    # temperature: 0.7        # omit to use the provider default
+    max_reply_chars: 300      # spoken answer is truncated to this many runes
+    history_messages: 12      # turns replayed per session
+    session_ttl_seconds: 900  # idle sessions are dropped after this
+    greeting: "我在，想问什么？"
+    farewell: "好的，再见。"
+    # Exact matches end the session (punctuation ignored), so "退出这个方案" is a
+    # question, not a farewell.
+    exit_keywords: ["退出", "结束", "再见", "拜拜", "不用了", "没事了", "bye", "exit"]
+    notify_telegram: false    # mirror exchanges into Telegram
 
-# Local Mihomo (Clash Meta) external-controller — Telegram: /list_proxy, /set_proxy, /delay_proxy
+# Local Mihomo (Clash Meta) external-controller — Telegram:
+#   /list_proxy, /set_proxy, /delay_proxy
 # CLI: mihomo list-proxy | set-proxy | delay-proxy
 mihomo:
   enabled: false
-  # Optional: probe URL and API timeout (ms) for GET /proxies/{name}/delay (used by /delay_proxy and delay-proxy)
+  # Optional: probe URL and API timeout (ms) for
+  #   GET /proxies/{name}/delay (used by /delay_proxy
+  #   and delay-proxy)
   # latency_test_url: "http://www.gstatic.com/generate_204"
   # latency_timeout_ms: 5000
-  # You can specify multiple mihomo instances. /set_proxy will apply the change to ALL instances.
+  # You can specify multiple mihomo instances. /set_proxy will
+  #   apply the change to ALL instances.
   instances:
     - name: "Main Gateway"
       api_base: "http://127.0.0.1:9090"
@@ -125,11 +197,13 @@ mihomo:
     #   secret: "my_secret"
     #   selector: "PROXY"
 
-# LLM API spend / balance — Telegram: /llm_usage, /deepseek_balance, /bailian_usage
+# LLM API spend / balance — Telegram: /llm_usage,
+#   /deepseek_balance, /bailian_usage
 # CLI: llm usage | deepseek | bailian
 # DeepSeek: GET /user/balance (prepaid balance).
 # 百炼 Token Plan / Coding Plan: used / remaining / reset via console session
-#   (console_cookie or `bl auth login --console`), NOT DashScope /quotas model limits.
+#   (console_cookie or `bl auth login --console`), NOT DashScope
+#   /quotas model limits.
 llm_usage:
   enabled: false
   proxy: ""
@@ -142,25 +216,32 @@ llm_usage:
     plan: token_plan_personal
     # Token Plan key starts with sk-sp-; Coding Plan often sk-ws- / sk-sp-
     api_key: "sk-sp-xxxxxxxx"
-    # Required for live used/remaining/reset (console cookie header from browser Network tab)
+    # Required for live used/remaining/reset (console cookie
+    #   header from browser Network tab)
     # console_cookie: "login_aliyunid_ticket=...; ..."
     # console_cookie_file: "/home/rhuang/.bailian/console.cookie"
-    # Or: install bailian-cli, run `bl auth login --console`, then set prefer_bl_cli: true
+    # Or: install bailian-cli, run `bl auth login --console`,
+    #   then set prefer_bl_cli: true
     prefer_bl_cli: true
 
 # Logging
 log_dir: logs
 log_file: switch_monitor.log
-# Log level: INFO (default, less noise) or DEBUG (verbose, including library debug)
+# Log level: INFO (default, less noise) or DEBUG (verbose,
+#   including library debug)
 log_level: INFO
 # Optional: append one JSON line per check for history (set to null to disable)
 history_file: switch_monitor_history.jsonl
 
-# Optional: daytime (08:00–20:00 local) calendar event per day when issues are confirmed.
+# Optional: daytime (08:00–20:00 local) calendar event per day
+#   when issues are confirmed.
 # One event per calendar day; further issues the same day update that event.
-# Obtain OAuth refresh tokens via a one-time browser consent; keep config.yaml private.
-# proxy: optional HTTP(S) proxy for OAuth and API (same idea as telegram recipients proxy).
-# calendar_id: Google often "primary"; Outlook: Graph calendar id, or omit for default calendar.
+# Obtain OAuth refresh tokens via a one-time browser consent;
+#   keep config.yaml private.
+# proxy: optional HTTP(S) proxy for OAuth and API (same idea as
+#   telegram recipients proxy).
+# calendar_id: Google often "primary"; Outlook: Graph calendar
+#   id, or omit for default calendar.
 calendar:
   enabled: false
   provider: google   # google | microsoft

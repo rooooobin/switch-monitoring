@@ -27,15 +27,53 @@ func RunXiaodu(ctx context.Context, cfg *config.MonitorConfig, args []string) er
 		slog.Error("CLI xiaodu: integration disabled in config")
 		return fmt.Errorf("xiaodu is not enabled in config")
 	}
-	if strings.TrimSpace(cfg.Xiaodu.IP) == "" {
-		return fmt.Errorf("xiaodu ip is required in config")
-	}
 	if len(args) < 1 {
-		return fmt.Errorf("xiaodu: expected subcommand (status, volume, mute, unmute, play, stop, pause, seek, tts, say, probe, bduss-check)")
+		return fmt.Errorf("xiaodu: expected subcommand (status, discover, volume, mute, unmute, play, stop, pause, seek, tts, say, probe, bduss-check, skill-serve, skill-test, skill-chat, codebuddy-models)")
 	}
 
-	c := newXiaoduClient(cfg.Xiaodu)
-	slog.Info("CLI xiaodu command", "subcommand", args[0], "args", args[1:], "ip", cfg.Xiaodu.IP)
+	// The AI skill webhook only needs cloud and LLM access, so it is dispatched
+	// before the speaker address is resolved: it must stay testable while the
+	// device itself is offline.
+	if IsXiaoduSkillSubcommand(args[0]) {
+		switch args[0] {
+		case "skill-serve":
+			return RunXiaoduSkillServe(ctx, cfg)
+		case "skill-test":
+			return RunXiaoduSkillTest(ctx, cfg, args[1:])
+		case "skill-chat":
+			return RunXiaoduSkillChat(ctx, cfg)
+		case "codebuddy-models":
+			return RunXiaoduCodeBuddyModels(ctx, cfg)
+		}
+	}
+
+	if strings.TrimSpace(cfg.Xiaodu.IP) == "" && !cfg.Xiaodu.AutoDiscoverIPOrDefault() {
+		return fmt.Errorf("xiaodu ip is required in config (or enable auto_discover_ip with bduss)")
+	}
+
+	// bduss-check and discover only talk to the cloud, so they must keep working
+	// while the speaker itself is unreachable.
+	if args[0] == "bduss-check" {
+		if err := newXiaoduClient(cfg.Xiaodu).CheckBDUSS(ctx); err != nil {
+			return fmt.Errorf("bduss check failed: %w", err)
+		}
+		fmt.Println("DuerOS BDUSS is valid.")
+		return nil
+	}
+	if args[0] == "discover" {
+		dev, err := runner.DiscoverXiaoduNow(ctx, cfg.Xiaodu)
+		if err != nil {
+			return fmt.Errorf("discovery failed: %w", err)
+		}
+		fmt.Println(runner.FormatXiaoduDevice(dev, cfg.Xiaodu.IP))
+		return nil
+	}
+
+	c, err := runner.XiaoduClientFor(ctx, cfg.Xiaodu)
+	if err != nil {
+		return fmt.Errorf("cannot resolve xiaodu speaker: %w", err)
+	}
+	slog.Info("CLI xiaodu command", "subcommand", args[0], "args", args[1:], "ip", c.IP())
 
 	switch args[0] {
 	case "status":
@@ -139,16 +177,10 @@ func RunXiaodu(ctx context.Context, cfg *config.MonitorConfig, args []string) er
 
 	case "probe":
 		if err := c.ProbeOnline(ctx); err != nil {
+			runner.InvalidateXiaoduIPCache()
 			return fmt.Errorf("probe failed: %w", err)
 		}
-		fmt.Println("Xiaodu speaker is online (DLNA reachable).")
-		return nil
-
-	case "bduss-check":
-		if err := c.CheckBDUSS(ctx); err != nil {
-			return fmt.Errorf("bduss check failed: %w", err)
-		}
-		fmt.Println("DuerOS BDUSS is valid.")
+		fmt.Printf("Xiaodu speaker is online (DLNA reachable at %s).\n", c.IP())
 		return nil
 
 	default:

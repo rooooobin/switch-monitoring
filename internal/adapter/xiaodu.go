@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,13 @@ const (
 	xiaoduRCType  = "urn:schemas-upnp-org:service:RenderingControl:1"
 	xiaoduAVTURL  = "/upnp/control/rendertransport1"
 	xiaoduRCURL   = "/upnp/control/rendercontrol1"
+)
+
+// The cloud endpoints are the same ones the H5 console calls, so presenting the
+// H5 user agent and referer keeps the requests looking like ordinary console use.
+const (
+	xiaoduUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
+	xiaoduH5Referer = "https://xiaodu.baidu.com/saiya/smarthome/index.html"
 )
 
 var (
@@ -45,7 +53,14 @@ type XiaoduDuerOSConfig struct {
 }
 
 // XiaoduClient controls a Xiaodu speaker via local DLNA and optional DuerOS cloud APIs.
+//
+// The LAN endpoint is mutable: DHCP moves the speaker between reboots, so
+// discovery can retarget a live client. All reads and writes of the endpoint go
+// through mu.
 type XiaoduClient struct {
+	mu      sync.RWMutex
+	ip      string
+	port    int
 	baseURL string
 	dueros  XiaoduDuerOSConfig
 	client  *http.Client
@@ -56,11 +71,21 @@ func NewXiaoduClient(ip string, port int, dueros XiaoduDuerOSConfig) *XiaoduClie
 	if port <= 0 {
 		port = 49494
 	}
-	return &XiaoduClient{
-		baseURL: fmt.Sprintf("http://%s:%d", strings.TrimSpace(ip), port),
-		dueros:  dueros,
-		client:  &http.Client{Timeout: 15 * time.Second},
+	c := &XiaoduClient{
+		ip:     strings.TrimSpace(ip),
+		port:   port,
+		dueros: dueros,
+		client: &http.Client{Timeout: 15 * time.Second},
 	}
+	c.baseURL = fmt.Sprintf("http://%s:%d", c.ip, port)
+	return c
+}
+
+// Port returns the DLNA port in use.
+func (c *XiaoduClient) Port() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.port
 }
 
 // XiaoduStatus is a snapshot of speaker state from DLNA queries.
@@ -86,14 +111,15 @@ func (c *XiaoduClient) soapRequest(ctx context.Context, controlURL, action, serv
   </s:Body>
 </s:Envelope>`, action, serviceType, argsXML, action)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+controlURL, bytes.NewReader([]byte(body)))
+	target := c.BaseURL() + controlURL
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader([]byte(body)))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
 	req.Header.Set("SOAPAction", fmt.Sprintf(`"%s#%s"`, serviceType, action))
 
-	slog.Info("Xiaodu DLNA request", "action", action, "url", c.baseURL+controlURL)
+	slog.Info("Xiaodu DLNA request", "action", action, "url", target)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		slog.Error("Xiaodu DLNA transport error", "action", action, "err", err)
@@ -222,13 +248,8 @@ func (c *XiaoduClient) GetStatus(ctx context.Context) (*XiaoduStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	host := strings.TrimPrefix(strings.TrimPrefix(c.baseURL, "http://"), "https://")
-	parts := strings.Split(host, ":")
-	ip := parts[0]
-	port := 49494
-	if len(parts) > 1 {
-		port, _ = strconv.Atoi(parts[1])
-	}
+	ip := c.IP()
+	port := c.Port()
 	ready, scene := c.duerosConfigState()
 	return &XiaoduStatus{
 		IP:             ip,
@@ -365,6 +386,8 @@ func (c *XiaoduClient) duerosPost(ctx context.Context, endpoint string, payload 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", xiaoduUserAgent)
+	req.Header.Set("Referer", xiaoduH5Referer)
 	if c.dueros.BDUSS != "" {
 		req.Header.Set("Cookie", "BDUSS="+c.dueros.BDUSS)
 	}

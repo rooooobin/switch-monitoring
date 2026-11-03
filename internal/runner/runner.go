@@ -48,6 +48,8 @@ type Runner struct {
 	cfgModTime   time.Time
 	triggerChan  chan struct{}
 	health       xiaoduHealthState
+	// skillServer is the DuerOS custom-skill webhook, non-nil only while it runs.
+	skillServer *DuerOSSkillServer
 	// pendingDNATDeletes holds /del_dnat targets awaiting /del_dnat_confirm,
 	// keyed by Telegram chat ID.
 	pendingDNATDeletes map[int64][]int
@@ -82,6 +84,10 @@ func (r *Runner) applyConfig(cfg *config.MonitorConfig) {
 
 	r.cfg = cfg
 	r.checker = checker.New(cfg.MinSpeedMbps)
+
+	// Credentials or the target speaker may have changed; the cached LAN address
+	// belongs to the previous config.
+	InvalidateXiaoduIPCache()
 
 	hasEmail := cfg.SMTP != nil && cfg.SMTP.Enabled && len(cfg.AlertEmails) > 0
 	hasTg := cfg.Telegram != nil && cfg.Telegram.Enabled && len(cfg.Telegram.Recipients) > 0
@@ -323,6 +329,7 @@ func (r *Runner) RunLoop(once bool) {
 	r.syncTelegramCommands(ctx)
 	go r.pollTelegramCommands(ctx)
 	go r.runXiaoduHealthLoop(ctx)
+	go r.runDuerOSSkillServer(ctx)
 
 	isManual := false
 	for {

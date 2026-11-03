@@ -43,21 +43,30 @@ func (r *Runner) runXiaoduHealthLoop(ctx context.Context) {
 
 func (r *Runner) runXiaoduHealthChecks(ctx context.Context) {
 	cfg := r.cfg.Xiaodu
-	if cfg == nil || !cfg.Enabled || strings.TrimSpace(cfg.IP) == "" {
+	if cfg == nil || !cfg.Enabled {
 		return
 	}
-	c := newXiaoduClient(cfg)
 	now := time.Now()
 
 	if cfg.Probe != nil && cfg.Probe.Enabled && r.probeDue(now, cfg.Probe.IntervalOrDefault()) {
 		r.markProbeRun(now)
-		err := c.ProbeOnline(ctx)
-		r.handleXiaoduProbeResult(cfg, err == nil, err)
+		c, err := XiaoduClientFor(ctx, cfg)
+		if err != nil {
+			r.handleXiaoduProbeResult(cfg, "", false, err)
+		} else {
+			err = c.ProbeOnline(ctx)
+			if err != nil {
+				// The speaker may have moved again: drop the cached address so the
+				// next operation re-discovers instead of retrying a dead one.
+				InvalidateXiaoduIPCache()
+			}
+			r.handleXiaoduProbeResult(cfg, c.IP(), err == nil, err)
+		}
 	}
 
 	if cfg.BDUSSCheck != nil && cfg.BDUSSCheck.Enabled && r.bdussDue(now, cfg.BDUSSCheck.IntervalOrDefault()) {
 		r.markBDUSSRun(now)
-		err := c.CheckBDUSS(ctx)
+		err := newXiaoduClient(cfg).CheckBDUSS(ctx)
 		r.handleXiaoduBDUSSResult(cfg, err == nil, err)
 	}
 }
@@ -86,11 +95,14 @@ func (r *Runner) markBDUSSRun(now time.Time) {
 	r.health.mu.Unlock()
 }
 
-func (r *Runner) handleXiaoduProbeResult(cfg *config.XiaoduConfig, ok bool, err error) {
+func (r *Runner) handleXiaoduProbeResult(cfg *config.XiaoduConfig, ip string, ok bool, err error) {
+	if strings.TrimSpace(ip) == "" {
+		ip = cfg.IP
+	}
 	if ok {
-		slog.Info("Xiaodu probe OK", "ip", cfg.IP)
+		slog.Info("Xiaodu probe OK", "ip", ip)
 	} else {
-		slog.Warn("Xiaodu probe failed", "ip", cfg.IP, "err", err)
+		slog.Warn("Xiaodu probe failed", "ip", ip, "err", err)
 	}
 
 	changed, prevKnown := r.setProbeOK(ok)
@@ -101,9 +113,9 @@ func (r *Runner) handleXiaoduProbeResult(cfg *config.XiaoduConfig, ok bool, err 
 		return
 	}
 	if ok {
-		r.notifyTelegramPlain(fmt.Sprintf("✅ Xiaodu speaker back online (%s)", cfg.IP))
+		r.notifyTelegramPlain(fmt.Sprintf("✅ Xiaodu speaker back online (%s)", ip))
 	} else {
-		r.notifyTelegramPlain(fmt.Sprintf("⚠️ Xiaodu speaker offline (%s): %v", cfg.IP, err))
+		r.notifyTelegramPlain(fmt.Sprintf("⚠️ Xiaodu speaker offline (%s): %v", ip, err))
 	}
 }
 
@@ -152,7 +164,7 @@ func (r *Runner) setBDUSSOK(ok bool) (changed, prevKnown bool) {
 
 func (r *Runner) maybeAlertTTS(ctx context.Context, events []checker.AlertEvent, aliases map[string]map[int]string) {
 	cfg := r.cfg.Xiaodu
-	if cfg == nil || !cfg.Enabled || strings.TrimSpace(cfg.IP) == "" || cfg.AlertTTS == nil {
+	if cfg == nil || !cfg.Enabled || cfg.AlertTTS == nil {
 		return
 	}
 	if !cfg.AlertTTS.ShouldSpeak(time.Now(), len(events), r.xiaoduFallbackTZ()) {
@@ -162,7 +174,11 @@ func (r *Runner) maybeAlertTTS(ctx context.Context, events []checker.AlertEvent,
 	if text == "" {
 		return
 	}
-	c := newXiaoduClient(cfg)
+	c, err := XiaoduClientFor(ctx, cfg)
+	if err != nil {
+		slog.Error("Xiaodu alert TTS skipped: cannot resolve speaker", "err", err)
+		return
+	}
 	used, err := c.TTS(ctx, text)
 	if err != nil {
 		slog.Error("Xiaodu alert TTS failed", "err", err, "text", text)
@@ -202,7 +218,15 @@ func (r *Runner) notifyTelegramPlain(message string) {
 
 // RunXiaoduProbeNow runs an immediate DLNA probe (CLI/Telegram).
 func RunXiaoduProbeNow(ctx context.Context, cfg *config.XiaoduConfig) error {
-	return newXiaoduClient(cfg).ProbeOnline(ctx)
+	c, err := XiaoduClientFor(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	if err := c.ProbeOnline(ctx); err != nil {
+		InvalidateXiaoduIPCache()
+		return err
+	}
+	return nil
 }
 
 // RunXiaoduBDUSSCheckNow runs an immediate BDUSS validation (CLI/Telegram).

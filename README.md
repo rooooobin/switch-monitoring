@@ -22,7 +22,8 @@ Optional integrations: **iKuai** router DNAT control, **Mihomo** (Clash Meta) pr
 - **iKuai integration** — list/add/edit/delete/enable/disable DNAT port-mapping rules (iKuai 3.x and 4.x API compatible)
 - **Mihomo (Clash Meta) integration** — list/switch/test proxy latency from Telegram or CLI
 - **LLM usage** — DeepSeek balance and 百炼 (DashScope) spend/tokens via Telegram or CLI
-- **Xiaodu smart speaker integration** — DLNA playback control, DuerOS TTS/voice commands, alert TTS, online probe, BDUSS health check
+- **Xiaodu smart speaker integration** — DLNA playback control, DuerOS TTS/voice commands, alert TTS, online probe, BDUSS health check, cloud IP auto-discovery
+- **Xiaodu AI skill** — a DuerOS custom-skill webhook that turns the speaker into a voice front-end for any OpenAI-compatible model, with multi-turn memory
 - Optional Google Calendar / Microsoft Outlook repair events for confirmed issues
 - Aligned plain-text status table in console output and alert messages
 - **Hot config reload** — edits to `config.yaml` are picked up automatically between poll cycles; no restart needed
@@ -92,6 +93,11 @@ switch-monitor --config config.yaml mihomo set-proxy <name>
 switch-monitor --config config.yaml xiaodu status
 switch-monitor --config config.yaml xiaodu tts "你好"
 switch-monitor --config config.yaml xiaodu probe
+switch-monitor --config config.yaml xiaodu discover
+switch-monitor --config config.yaml xiaodu skill-test "用一句话介绍你自己"
+switch-monitor --config config.yaml xiaodu skill-chat
+switch-monitor --config config.yaml xiaodu skill-serve
+switch-monitor --config config.yaml xiaodu codebuddy-models
 ```
 
 See `switch-monitor help` for the full list.
@@ -174,6 +180,8 @@ Commands are only accepted from `chat_id`s listed in `telegram.recipients`.
 | `/xiaodu_say <text>` | Send voice command (e.g. "现在几点了") |
 | `/xiaodu_probe` | Check Xiaodu DLNA reachability |
 | `/xiaodu_bduss_check` | Validate DuerOS BDUSS credentials |
+| `/xiaodu_discover` | Resolve the speaker's current LAN IP from the cloud |
+| `/xiaodu_skill_status` | DuerOS AI skill webhook status (listen, model, sessions) |
 | `/llm_usage` or `/ai_usage` | DeepSeek balance + 百炼 spend/token usage (live API) |
 | `/deepseek_balance` | DeepSeek prepaid balance only |
 | `/bailian_usage` | Alibaba 百炼 (DashScope) spend and tokens only |
@@ -205,6 +213,8 @@ xiaodu_tts - Speak text via DuerOS TTS (use: /xiaodu_tts <text>)
 xiaodu_say - Send voice command (e.g. "现在几点了")
 xiaodu_probe - Check Xiaodu DLNA reachability
 xiaodu_bduss_check - Validate DuerOS BDUSS credentials
+xiaodu_discover - Resolve the Xiaodu speaker's current LAN IP from the cloud
+xiaodu_skill_status - Show DuerOS AI skill webhook status
 llm_usage - Show DeepSeek + 百炼 usage
 deepseek_balance - Show DeepSeek balance only
 bailian_usage - Show Bailian usage only
@@ -309,6 +319,7 @@ Control a Xiaodu speaker on the LAN via DLNA; optional DuerOS cloud credentials 
 | `xiaodu.enabled` | `false` | Enable Xiaodu integration |
 | `xiaodu.ip` | — | Speaker IP address |
 | `xiaodu.port` | `49494` | DLNA port |
+| `xiaodu.auto_discover_ip` | `true` | Resolve the speaker's LAN IP from the cloud device list instead of trusting `xiaodu.ip`. The address is DHCP-assigned and moves between reboots, which otherwise breaks DLNA and TTS silently. Requires `bduss`; the device is matched by `cuid`, and any lookup failure falls back to `xiaodu.ip`. |
 | `xiaodu.client_id` | — | DuerOS client ID (from xiaodu.baidu.com device list) |
 | `xiaodu.cuid` | — | Device CUID |
 | `xiaodu.bduss` | — | Baidu BDUSS cookie |
@@ -340,7 +351,157 @@ Control a Xiaodu speaker on the LAN via DLNA; optional DuerOS cloud credentials 
 | `xiaodu.bduss_check.interval_seconds` | `86400` | Check interval |
 | `xiaodu.bduss_check.notify_telegram` | `true` | Notify when BDUSS becomes invalid or valid again |
 
-CLI: `xiaodu status`, `xiaodu volume <n>`, `xiaodu mute`, `xiaodu unmute`, `xiaodu play <url>`, `xiaodu stop`, `xiaodu pause`, `xiaodu seek <pos>`, `xiaodu tts <text>`, `xiaodu say <text>`, `xiaodu probe`, `xiaodu bduss-check`
+CLI: `xiaodu status`, `xiaodu discover`, `xiaodu volume <n>`, `xiaodu mute`, `xiaodu unmute`, `xiaodu play <url>`, `xiaodu stop`, `xiaodu pause`, `xiaodu seek <pos>`, `xiaodu tts <text>`, `xiaodu say <text>`, `xiaodu probe`, `xiaodu bduss-check`, `xiaodu skill-serve`, `xiaodu skill-test <text>`, `xiaodu skill-chat`, `xiaodu codebuddy-models`
+
+### Xiaodu AI Skill (DuerOS custom skill → your LLM)
+
+Turns the speaker into a voice front-end for your own model. DuerOS pushes each
+utterance made inside the skill session to a webhook; the reply goes back as
+`PlainText` and the speaker's native TTS reads it aloud.
+
+This is the input half that the speaker has no public API for. Polling a
+conversation log — the trick Xiaomi speakers allow — is not possible on Xiaodu:
+Baidu exposes no such endpoint, and there is no way to mute the built-in answer,
+so a polling bridge would answer twice. A skill session has neither problem.
+
+**One-time setup on <https://dueros.baidu.com/dbp>** (log in with the *same*
+Baidu account the speaker is bound to):
+
+1. Create a **自定义技能** (custom skill) and pick a 调用名 (invocation name).
+2. Under 意图, reference the system intent **缺省意图**
+   (`ai.dueros.common.default_intent`). Without it, NLU rejects free-form
+   questions and your webhook never sees them. Optionally add an intent with a
+   `query` slot; both forms are handled.
+3. Under 配置服务 choose **Web Service** and set the URL to
+   `https://<your-public-host>/dueros` (must be HTTPS with a valid certificate).
+4. In 模拟测试 enable **真机测试**, then say **“小度小度，打开调试技能模式”** to the
+   speaker. Unpublished skills run on your own device in this mode — no review,
+   no 开发者认证 needed (certification is only required to publish to the store).
+5. Say **“小度小度，打开<调用名>”**, then just talk.
+
+**Verify locally before exposing anything.** `skill-test` drives the real handler
+in-process, and `skill-chat` does the same over stdin so multi-turn memory can be
+checked; neither needs a public endpoint, a DBP skill, or a reachable speaker:
+
+```bash
+switch-monitor --config config.yaml xiaodu skill-test "用一句话介绍你自己"
+switch-monitor --config config.yaml xiaodu skill-chat
+switch-monitor --config config.yaml xiaodu skill-serve   # foreground webhook
+switch-monitor --config config.yaml xiaodu codebuddy-models
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `xiaodu.skill.enabled` | `false` | Run the webhook |
+| `xiaodu.skill.provider` | `openai` | `openai` (any compatible endpoint) or `codebuddy` (Tencent subscription) |
+| `xiaodu.skill.listen` | `:9528` | Bind address |
+| `xiaodu.skill.path` | `/dueros` | Webhook path; must match the platform config |
+| `xiaodu.skill.verify_signature` | `true` | Verify DuerOS's RSA-SHA1 request signature |
+| `xiaodu.skill.allowed_skill_ids` | `[]` | Optional `applicationId` allowlist |
+| `xiaodu.skill.llm_base_url` | — | OpenAI-compatible API root (ignored for `codebuddy`) |
+| `xiaodu.skill.llm_api_key` | — | API key / bearer token (also used by `codebuddy`) |
+| `xiaodu.skill.codebuddy_token_file` | — | Explicit path to a bearer-token file (`codebuddy` only) |
+| `xiaodu.skill.codebuddy_refresh_token_file` | — | Optional separate refresh-token file (`codebuddy` only) |
+| `xiaodu.skill.llm_model` | — | Model id |
+| `xiaodu.skill.llm_proxy` | — | Optional HTTP proxy |
+| `xiaodu.skill.llm_timeout_seconds` | `60` | Request timeout |
+| `xiaodu.skill.system_prompt` | voice-oriented Chinese prompt | System message |
+| `xiaodu.skill.max_tokens` | provider default | Completion cap |
+| `xiaodu.skill.temperature` | provider default | Sampling temperature |
+| `xiaodu.skill.max_reply_chars` | `300` | Spoken answer is truncated to this many runes |
+| `xiaodu.skill.history_messages` | `12` | Turns replayed per session |
+| `xiaodu.skill.session_ttl_seconds` | `900` | Idle sessions are dropped after this |
+| `xiaodu.skill.greeting` | `我在，想问什么？` | Reply to LaunchRequest |
+| `xiaodu.skill.farewell` | `好的，再见。` | Reply that ends a session |
+| `xiaodu.skill.exit_keywords` | `退出,结束,再见,拜拜,不用了,没事了,bye,exit` | Exact matches (punctuation ignored) end the session |
+| `xiaodu.skill.notify_telegram` | `false` | Mirror each voice exchange into the chat |
+
+Notes:
+
+- **Keep `verify_signature` on** for any internet-reachable endpoint. Without it,
+  anyone who finds the URL can drive your speaker and spend your LLM quota. The
+  check follows Baidu's 技能认证 spec: the certificate URL is pinned to
+  `https://duer.bdstatic.com/saiya/flow/` on port 443, the certificate's SAN must
+  be `dueros-api.baidu.com`, the signature is RSA-SHA1 over the raw body, and the
+  request timestamp must be within 180 s.
+- Replies are flattened for speech before being spoken: markdown, links, bullets
+  and code fences are stripped, then truncated on a rune boundary. The **full**
+  reply is what goes into history, so a follow-up can still refer to content the
+  speaker never read aloud.
+- History is in-memory per DuerOS session and intentionally not persisted;
+  sessions last minutes, so a restart costs nothing but a fresh conversation.
+- The skill config is read when the monitor loop starts. Changing `listen` or
+  `path` needs a restart (other config sections hot-reload as usual).
+- Only one skill can be in 调试技能模式 at a time per personal developer account.
+
+#### CodeBuddy provider (subscription-backed)
+
+Set `xiaodu.skill.provider: codebuddy` to answer through a Tencent CodeBuddy
+subscription. The model list reports cost 0 for these models, so voice traffic
+is effectively free within the plan.
+
+**Deployment contract:** this binary runs as a standalone systemd service on an
+ARM box (r2s). There is no Pi installation, no browser login flow and no
+per-user credential store there. Therefore all credentials come from
+`config.yaml` — nothing is inferred from `$HOME`, nothing is read from another
+tool's files, and **nothing is ever written back to disk**. Use absolute paths
+for token files so the unit's `WorkingDirectory` cannot affect resolution.
+
+Choose one credential source (checked in this order):
+
+1. **API key / static bearer token** (simplest for a daemon):
+
+   ```yaml
+   xiaodu:
+     skill:
+       enabled: true
+       provider: codebuddy
+       llm_api_key: "ck_..."          # API key, or a static access token
+       llm_model: deepseek-v4.1-flash  # default if omitted
+   ```
+
+2. **Token file** — plain text, or a JSON object with `access` / `refresh` /
+   `expires` (epoch ms). The optional refresh file wins over an embedded one:
+
+   ```yaml
+   xiaodu:
+     skill:
+       enabled: true
+       provider: codebuddy
+       codebuddy_token_file: /home/rhuang/.config/switch-monitor/codebuddy.token
+       codebuddy_refresh_token_file: /home/rhuang/.config/switch-monitor/codebuddy.refresh
+   ```
+
+`llm_base_url` is optional for CodeBuddy (defaults to
+`https://copilot.tencent.com`) and can be overridden for an international
+endpoint. Protect token files with `chmod 600` and keep them outside the repo;
+the service user only needs read access.
+
+Pick a model and verify the whole chain locally:
+
+```bash
+switch-monitor --config config.yaml xiaodu codebuddy-models
+switch-monitor --config config.yaml xiaodu skill-test "用一句话介绍你自己"
+switch-monitor --config config.yaml xiaodu skill-chat
+```
+
+Implementation notes (why this is not just another `llm_base_url`):
+
+- The gateway **rejects non-streaming requests** (`code 11101`), so the client
+  requests SSE and aggregates `delta.content` into a complete sentence before
+  the speaker reads it aloud. `reasoning_content` (chain-of-thought) is
+  deliberately discarded — it must never be spoken.
+- The craft-agent model list comes from `GET /v3/config`; the gateway returns
+  `agents[].models` as id strings and model metadata separately.
+- CodeBuddy occasionally wraps an upstream hiccup as HTTP 400
+  `{"code":11133}`. Those are retried with 1s → 4s → 10s → 25s backoff;
+  every other 400 is surfaced verbatim.
+- Requests carry the VSCode-shaped `X-*` headers the gateway expects.
+- If a refresh token is configured, the access token is renewed in memory 5
+  minutes before expiry and once more on a mid-flight 401/403. The rotated
+  token is **not persisted**: update the configured key/token file yourself
+  when it expires. A missing credential produces an error naming the exact
+  config keys to set.
 
 ### Calendar (optional)
 

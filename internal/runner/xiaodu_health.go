@@ -233,3 +233,13 @@ func RunXiaoduProbeNow(ctx context.Context, cfg *config.XiaoduConfig) error {
 func RunXiaoduBDUSSCheckNow(ctx context.Context, cfg *config.XiaoduConfig) error {
 	return newXiaoduClient(cfg).CheckBDUSS(ctx)
 }
+
+// notifyTelegramHTML sends an already-escaped HTML message to all recipients.
+func (r *Runner) notifyTelegramHTML(message string) {
+	if r.cfg.Telegram == nil || !r.cfg.Telegram.Enabled {
+		return
+	}
+	if err := alerting.NotifyTelegramHTML(r.cfg.Telegram, message); err != nil {
+		slog.Warn("Telegram HTML notify failed", "err", err)
+	}
+}

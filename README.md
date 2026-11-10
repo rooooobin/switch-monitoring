@@ -24,6 +24,7 @@ Optional integrations: **iKuai** router DNAT control, **Mihomo** (Clash Meta) pr
 - **LLM usage** — DeepSeek balance and 百炼 (DashScope) spend/tokens via Telegram or CLI
 - **Xiaodu smart speaker integration** — DLNA playback control, DuerOS TTS/voice commands, alert TTS, online probe, BDUSS health check, cloud IP auto-discovery
 - **Xiaodu AI skill** — a DuerOS custom-skill webhook that turns the speaker into a voice front-end for any OpenAI-compatible model, with multi-turn memory
+- **Inbound alert webhook** — other hosts (headless servers, NAS, router scripts) push alerts here over HTTP, so they need no bot token and no MTA
 - Optional Google Calendar / Microsoft Outlook repair events for confirmed issues
 - Aligned plain-text status table in console output and alert messages
 - **Hot config reload** — edits to `config.yaml` are picked up automatically between poll cycles; no restart needed
@@ -98,6 +99,8 @@ switch-monitor --config config.yaml xiaodu skill-test "用一句话介绍你自�
 switch-monitor --config config.yaml xiaodu skill-chat
 switch-monitor --config config.yaml xiaodu skill-serve
 switch-monitor --config config.yaml xiaodu codebuddy-models
+switch-monitor --config config.yaml alert                       # sample alerts per severity
+switch-monitor --config config.yaml alert preview "<title>" "<body>"
 ```
 
 See `switch-monitor help` for the full list.
@@ -544,6 +547,62 @@ Issue Details:
   - mercury-sg108 port 2 (IPTV): DOWN
   - mercury-sg108 port 5 (Mom): LOW SPEED (100 Mbps)
 ```
+
+Telegram messages use HTML parse mode: the subject is bold, per-switch tables go
+inside `<pre>` so columns align, and long bodies collapse into a
+`<blockquote expandable>` so the notification preview stays short.
+
+Preview the rendering locally (no message is sent):
+
+```bash
+switch-monitor -config config.yaml alert                      # one sample per severity
+switch-monitor -config config.yaml alert preview "disk /data at 94%" '"/dev/nvme0n1p2 99% /data"'
+ALERT_SEVERITY=critical switch-monitor -config config.yaml alert preview "mihomo down"
+```
+
+### Inbound alert webhook (alerts from other hosts)
+
+The monitor can also *receive* alerts, so a host with no mailer and no bot token
+of its own (a headless server, a NAS, a router script) can page you through the
+same Telegram recipients:
+
+```yaml
+webhook:
+  enabled: true
+  listen: "0.0.0.0:8088"      # omit for 127.0.0.1:8088
+  path: "/alert"
+  token: "long-random-shared-secret"
+  max_body_bytes: 65536
+```
+
+Send one:
+
+```bash
+# JSON (host and severity are optional; severity is inferred from the text)
+curl -fsS -X POST http://192.168.2.154:8088/alert \
+  -H "X-Alert-Token: long-random-shared-secret" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"disk /data at 94%","body":"df -h /data ...","severity":"warning","host":"surface"}'
+
+# plain text
+printf 'certificate expires soon\nnotAfter=Feb 7 2027' | \
+  curl -fsS -X POST http://192.168.2.154:8088/alert \
+       -H "X-Alert-Token: long-random-shared-secret" --data-binary @-
+
+# GET, convenient from cron
+curl -fsS "http://192.168.2.154:8088/alert?token=...&title=cert+expiry&body=21+days"
+```
+
+`GET /health` needs no token and returns counters only (`accepted`, `rejected`,
+`uptime_s`), so an uptime probe leaks nothing.
+
+Security notes:
+
+- The token is a shared secret compared in constant time; an empty token is
+  rejected unless `allow_unauthenticated` is set, and that flag is only accepted
+  on a loopback listen address.
+- Bind to a LAN-reachable address and firewall 8088 to your own hosts. Do not
+  expose it to the internet: whoever can reach it can page you.
 
 ---
 

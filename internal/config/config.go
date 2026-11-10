@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -78,6 +79,51 @@ type TelegramConfig struct {
 	Enabled        bool                `yaml:"enabled"`
 	ListenCommands bool                `yaml:"listen_commands"`
 	Recipients     []TelegramRecipient `yaml:"recipients"`
+}
+
+// WebhookConfig exposes an inbound HTTP endpoint so external hosts (a NAS, a
+// headless server, a router script...) can push their own alerts into the same
+// Telegram/email pipeline, instead of each host needing a bot token or an MTA.
+type WebhookConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"` // default 127.0.0.1:8088
+	Path    string `yaml:"path"`   // default /alert
+	// Token is the shared secret expected in the X-Alert-Token header (or the
+	// token query parameter). Required unless AllowUnauthenticated is set.
+	Token string `yaml:"token"`
+	// AllowUnauthenticated permits an empty Token. Only allowed on a loopback
+	// listen address; keep it false for anything routable.
+	AllowUnauthenticated bool `yaml:"allow_unauthenticated"`
+	// MaxBodyBytes caps the accepted request body (default 64 KiB).
+	MaxBodyBytes int64 `yaml:"max_body_bytes"`
+}
+
+// ListenOrDefault returns the configured listen address, defaulting to loopback.
+func (w *WebhookConfig) ListenOrDefault() string {
+	if w == nil || strings.TrimSpace(w.Listen) == "" {
+		return "127.0.0.1:8088"
+	}
+	return strings.TrimSpace(w.Listen)
+}
+
+// PathOrDefault returns the configured HTTP path, defaulting to /alert.
+func (w *WebhookConfig) PathOrDefault() string {
+	if w == nil || strings.TrimSpace(w.Path) == "" {
+		return "/alert"
+	}
+	p := strings.TrimSpace(w.Path)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
+}
+
+// MaxBodyBytesOrDefault caps the request body, defaulting to 64 KiB.
+func (w *WebhookConfig) MaxBodyBytesOrDefault() int64 {
+	if w == nil || w.MaxBodyBytes <= 0 {
+		return 64 << 10
+	}
+	return w.MaxBodyBytes
 }
 
 // IkuaiConfig holds settings for an iKuai router.
@@ -180,6 +226,7 @@ type MonitorConfig struct {
 	SMTP                   *SMTPConfig     `yaml:"smtp"`
 	Telegram               *TelegramConfig `yaml:"telegram"`
 	Ikuai                  *IkuaiConfig    `yaml:"ikuai"`
+	Webhook                *WebhookConfig  `yaml:"webhook"`
 	Xiaodu                 *XiaoduConfig   `yaml:"xiaodu"`
 	Mihomo                 *MihomoConfig   `yaml:"mihomo"`
 	LLMUsage               *LLMUsageConfig `yaml:"llm_usage"`
@@ -236,6 +283,14 @@ type rawYAML struct {
 		Username string `yaml:"username"`
 		Password string `yaml:"password"`
 	} `yaml:"ikuai"`
+	Webhook *struct {
+		Enabled              bool   `yaml:"enabled"`
+		Listen               string `yaml:"listen"`
+		Path                 string `yaml:"path"`
+		Token                string `yaml:"token"`
+		AllowUnauthenticated bool   `yaml:"allow_unauthenticated"`
+		MaxBodyBytes         int64  `yaml:"max_body_bytes"`
+	} `yaml:"webhook"`
 	Xiaodu *struct {
 		Enabled        bool   `yaml:"enabled"`
 		IP             string `yaml:"ip"`
@@ -289,13 +344,13 @@ type rawYAML struct {
 		} `yaml:"skill"`
 	} `yaml:"xiaodu"`
 	Mihomo *struct {
-		Enabled   bool   `yaml:"enabled"`
+		Enabled          bool   `yaml:"enabled"`
 		LatencyTestURL   string `yaml:"latency_test_url"`
 		LatencyTimeoutMS int    `yaml:"latency_timeout_ms"`
 		// legacy single config
-		APIBase  string `yaml:"api_base"`
-		Secret   string `yaml:"secret"`
-		Selector string `yaml:"selector"`
+		APIBase   string `yaml:"api_base"`
+		Secret    string `yaml:"secret"`
+		Selector  string `yaml:"selector"`
 		Instances []struct {
 			Name     string `yaml:"name"`
 			APIBase  string `yaml:"api_base"`
@@ -304,8 +359,8 @@ type rawYAML struct {
 		} `yaml:"instances"`
 	} `yaml:"mihomo"`
 	LLMUsage *struct {
-		Enabled bool   `yaml:"enabled"`
-		Proxy   string `yaml:"proxy"`
+		Enabled  bool   `yaml:"enabled"`
+		Proxy    string `yaml:"proxy"`
 		DeepSeek *struct {
 			Enabled bool   `yaml:"enabled"`
 			APIKey  string `yaml:"api_key"`
@@ -614,11 +669,57 @@ func LoadConfig(path string) (*MonitorConfig, error) {
 		}
 	}
 
+	if raw.Webhook != nil {
+		cfg.Webhook = &WebhookConfig{
+			Enabled:              raw.Webhook.Enabled,
+			Listen:               strings.TrimSpace(raw.Webhook.Listen),
+			Path:                 strings.TrimSpace(raw.Webhook.Path),
+			Token:                strings.TrimSpace(raw.Webhook.Token),
+			AllowUnauthenticated: raw.Webhook.AllowUnauthenticated,
+			MaxBodyBytes:         raw.Webhook.MaxBodyBytes,
+		}
+	}
+	if err := validateWebhook(cfg.Webhook); err != nil {
+		return nil, err
+	}
+
 	if err := validateCalendar(cfg.Calendar); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
+}
+
+// validateWebhook refuses configurations that would expose an unauthenticated
+// alert endpoint to the network.
+func validateWebhook(w *WebhookConfig) error {
+	if w == nil || !w.Enabled {
+		return nil
+	}
+	if w.Token == "" && !w.AllowUnauthenticated {
+		return fmt.Errorf("webhook: token is required (set webhook.token, or webhook.allow_unauthenticated for a loopback-only listener)")
+	}
+	if w.Token == "" && !isLoopbackListen(w.ListenOrDefault()) {
+		return fmt.Errorf("webhook: allow_unauthenticated is only allowed on a loopback listen address, got %q", w.ListenOrDefault())
+	}
+	return nil
+}
+
+// isLoopbackListen reports whether addr binds only to the local machine.
+func isLoopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false // ":8088" binds every interface
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func parsePorts(v interface{}) ([]int, error) {

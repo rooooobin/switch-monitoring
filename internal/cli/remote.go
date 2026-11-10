@@ -48,6 +48,10 @@ func PrintSubcommandHelp(w io.Writer) {
   switch-monitor llm deepseek
   switch-monitor llm bailian
 
+  switch-monitor alert            # print sample alerts in every severity
+  switch-monitor alert preview <title> [body...]
+                                  # render the Telegram HTML for one alert
+
 Requires ikuai / mihomo / xiaodu / llm_usage sections enabled in the config file (same as Telegram).
 Mihomo delay uses latency_test_url and latency_timeout_ms from config when set.
 `)

@@ -330,6 +330,7 @@ func (r *Runner) RunLoop(once bool) {
 	go r.pollTelegramCommands(ctx)
 	go r.runXiaoduHealthLoop(ctx)
 	go r.runDuerOSSkillServer(ctx)
+	go r.runAlertWebhook(ctx)
 
 	isManual := false
 	for {

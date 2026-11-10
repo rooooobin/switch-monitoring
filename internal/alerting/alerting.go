@@ -204,6 +204,32 @@ func NotifyTelegramPlain(cfg *config.TelegramConfig, message string) error {
 	return nil
 }
 
+// NotifyTelegramHTML sends an already-escaped Telegram HTML message to all
+// enabled recipients. Callers must escape user data themselves.
+func NotifyTelegramHTML(cfg *config.TelegramConfig, htmlMsg string) error {
+	if cfg == nil || !cfg.Enabled || len(cfg.Recipients) == 0 {
+		return nil
+	}
+	var errs []string
+	for _, rcpt := range cfg.Recipients {
+		client, err := telegram.NewClient(rcpt.Token, rcpt.Proxy)
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = client.SendMessageHTML(ctx, rcpt.ChatID, htmlMsg)
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("chat %s: %v", rcpt.ChatID, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("telegram notify: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
 func (s *AlertService) sendTelegramHTML(htmlMsg string, r config.TelegramRecipient) error {
 	client, err := telegram.NewClient(r.Token, r.Proxy)
 	if err != nil {
@@ -238,7 +264,9 @@ func (s *AlertService) sendEmail(subject, body, toAddr string) error {
 }
 
 func (s *AlertService) sendSSL(addr string, auth smtp.Auth, from, to string, msg []byte) error {
-	tlsCfg := &tls.Config{ServerName: s.smtp.Host} //nolint:gosec
+	// TLS 1.2 is the floor: older protocol versions are not acceptable for
+	// credentials, while pinning 1.3 would break providers such as smtp.qq.com.
+	tlsCfg := &tls.Config{ServerName: s.smtp.Host, MinVersion: tls.VersionTLS12}
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 30 * time.Second}, "tcp", addr, tlsCfg)
 	if err != nil {
 		return fmt.Errorf("SMTP SSL dial: %w", err)
@@ -278,7 +306,7 @@ func (s *AlertService) sendSTARTTLS(addr string, auth smtp.Auth, from, to string
 	defer client.Quit() //nolint:errcheck
 
 	if useTLS {
-		tlsCfg := &tls.Config{ServerName: s.smtp.Host} //nolint:gosec
+		tlsCfg := &tls.Config{ServerName: s.smtp.Host, MinVersion: tls.VersionTLS12}
 		if err := client.StartTLS(tlsCfg); err != nil {
 			return fmt.Errorf("SMTP STARTTLS: %w", err)
 		}

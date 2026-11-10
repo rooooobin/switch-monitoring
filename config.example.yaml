@@ -71,6 +71,29 @@ telegram:
       chat_id: "987654321"
       proxy: "http://127.0.0.1:7890"
 
+# Inbound alert webhook: lets OTHER hosts on the LAN push their own alerts into
+# this program's Telegram/email pipeline, so they need neither a bot token nor an
+# MTA (a headless server with no mailer can still page you).
+#
+#   curl -fsS -X POST http://192.168.2.154:8088/alert \
+#     -H "X-Alert-Token: <token>" -H 'Content-Type: application/json' \
+#     -d '{"title":"disk /data at 94%","body":"df -h /data ...","severity":"warning","host":"surface"}'
+#
+# Also accepted: plain-text body, or GET /alert?token=..&title=..&body=..
+# GET /health needs no token and reports only counters (no config).
+#
+# The token is a shared secret. Keep the listener on a LAN address reachable by
+# your hosts and firewall it to them; never expose it to the internet.
+webhook:
+  enabled: false
+  listen: "0.0.0.0:8088"       # loopback-only default when omitted: 127.0.0.1:8088
+  path: "/alert"
+  token: "change-me-to-a-long-random-string"
+  # Only allowed on a loopback listen address; an unauthenticated endpoint that
+  # the LAN can reach would let anyone page you.
+  allow_unauthenticated: false
+  max_body_bytes: 65536
+
 # iKuai Router settings for port-mapping (DNAT) rule management
 # via Telegram / CLI
 # iKuai OS 4.x: 策略中心 → NAT → 端口映射 (3.x: 行为管控 → 端口映射)
